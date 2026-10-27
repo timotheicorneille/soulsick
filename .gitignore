@@ -12,3 +12,5 @@ data/
 docs/
 .claude/
 skills-lock.json
+result
+result-*

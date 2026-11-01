@@ -27,6 +27,13 @@ services:
       VPN_PORT_FORWARDING: "on"
       VPN_PORT_FORWARDING_STATUS_FILE: /gluetun/forwarded_port
       TZ: ${TZ:-Europe/Paris}
+    # Healthy only once Proton has forwarded a port: Soulsick doesn't start before (depends_on below)
+    healthcheck:
+      test: ["CMD-SHELL", "/gluetun-entrypoint healthcheck && test -s /gluetun/forwarded_port"]
+      interval: 5s
+      timeout: 5s
+      start_period: 90s
+      retries: 3
     ports:
       - "5030:5030"        # Soulsick web UI (the Soulseek port is the forwarded one, nothing to publish)
     volumes:

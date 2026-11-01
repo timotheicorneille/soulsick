@@ -1,3 +1,4 @@
+from .. import lyrics
 from ..models import iso_utc, Artist, Candidate, LibraryFile, QualityProfile, Release, ReleaseGroup, Share
 
 
@@ -146,4 +147,15 @@ def library_file_dict(f: LibraryFile) -> dict:
         "release_group_mbid": f.release_group_mbid,
         "release_mbid": f.release_mbid,
         "recording_mbid": f.recording_mbid,
+        "lyrics": file_lyrics(f),
     }
+
+
+def file_lyrics(f: LibraryFile) -> dict | None:
+    """The lyrics Navidrome plays for this file: the file next to it first, as its default
+    LyricsPriority (.lrc, .txt, then embedded)."""
+    if f.lyrics_file:
+        return {"kind": lyrics.kind_of_file(f.lyrics_file), "source": "file", "ext": f.lyrics_file}
+    if f.lyrics_embedded:
+        return {"kind": f.lyrics_embedded, "source": "embedded", "ext": None}
+    return None

@@ -9,7 +9,6 @@ import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { ago, bytes, splitPath, speed } from '@/lib/format'
-import { isQobuz } from '@/lib/qobuz'
 import { transferState } from '@/lib/status'
 import { cn } from '@/lib/utils'
 import { useLive } from '@/stores/live'
@@ -155,8 +154,7 @@ const st = computed(() => {
     </div>
     <div class="col-span-2 flex min-w-0 flex-wrap items-center gap-x-3 gap-y-0.5 text-[11.5px]">
       <span class="text-faint">{{ tr.direction === 'download' ? t('transfer.from') : t('transfer.to') }}</span>
-      <span v-if="isQobuz(tr.remote_path)" class="font-medium text-muted-foreground">Qobuz</span>
-      <RouterLink v-else :to="{ name: 'peer', params: { username: tr.username } }" class="font-mono text-muted-foreground hover:text-primary">
+      <RouterLink :to="{ name: 'peer', params: { username: tr.username } }" class="font-mono text-muted-foreground hover:text-primary">
         {{ tr.username }}
       </RouterLink>
       <template v-if="tr.local_path">

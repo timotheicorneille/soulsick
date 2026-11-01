@@ -237,6 +237,13 @@ class LibraryFile(Base):
     release_group_mbid: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
     release_mbid: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
     recording_mbid: Mapped[str | None] = mapped_column(String, nullable=True)
+    # Paroles : fichier à côté (son extension : lrc, elrc, txt), et intégrées (« synced », « plain »,
+    # "" si aucune, NULL si pas encore lu)
+    lyrics_file: Mapped[str | None] = mapped_column(String, nullable=True)
+    lyrics_embedded: Mapped[str | None] = mapped_column(String, nullable=True)
+    # Last search on LRCLIB, and what it said when nothing was written (« not_found », « instrumental »)
+    lyrics_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    lyrics_missing: Mapped[str | None] = mapped_column(String, nullable=True)
     scanned_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 

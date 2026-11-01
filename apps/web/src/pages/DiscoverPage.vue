@@ -6,6 +6,7 @@ import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
 import AddArtistDialog from '@/components/AddArtistDialog.vue'
+import ArtistPhoto from '@/components/ArtistPhoto.vue'
 import PageHeader from '@/components/PageHeader.vue'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -71,9 +72,6 @@ const dismissMany = useMutation({
   },
 })
 
-function initials(name: string) {
-  return name.split(/\s+/).filter(Boolean).slice(0, 2).map(w => w[0]!.toUpperCase()).join('')
-}
 </script>
 
 <template>
@@ -140,9 +138,7 @@ function initials(name: string) {
         )"
       >
         <div class="relative shrink-0">
-          <div class="flex size-11 items-center justify-center rounded-full bg-primary/10 font-mono text-[13px] text-primary">
-            {{ initials(r.name) }}
-          </div>
+          <ArtistPhoto :mbid="r.mbid" :name="r.name" />
           <Checkbox
             :model-value="selected.has(r.mbid)"
             :aria-label="t('discover.selectOne', { name: r.name })"

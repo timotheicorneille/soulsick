@@ -24,9 +24,9 @@ from .services.hunter import HunterService
 from .services.importer import ImportService
 from .services.libguard import LibraryGuard
 from .services.library import LibraryService
+from .services.lyrics_fetch import LyricsFetchService
 from .services.navidrome import NavidromeService
 from .services.peers import PeerService
-from .services.qobuz import QobuzService, is_qobuz
 from .services.shares import ShareService
 from .services.storage import StorageService
 from .services.transfers import TransferService
@@ -49,6 +49,7 @@ class Core:
         self.engine = engine or SlskEngine(str(env.downloads_dir))
         self.catalog = CatalogService(self)
         self.library = LibraryService(self)
+        self.lyrics = LyricsFetchService(self)
         self.hunter = HunterService(self)
         self.importer = ImportService(self)
         self.transfers = TransferService(self)
@@ -60,7 +61,6 @@ class Core:
         self.storage = StorageService(self)
         self.guard = LibraryGuard(self)
         self.peers = PeerService(self)
-        self.qobuz = QobuzService(self)
         self.discover = DiscoverService(self)
         self._tasks: list[asyncio.Task] = []
 
@@ -78,10 +78,6 @@ class Core:
             path.write_bytes(os.urandom(32))
         return path.read_bytes()
 
-    def backend(self, remote_path: str | None):
-        """Who downloads this file: Qobuz for its own paths, the Soulseek engine for the rest."""
-        return self.qobuz if is_qobuz(remote_path) else self.engine
-
     async def _engine_info(self, kind: str, message: Msg, data: dict) -> None:
         level = data.pop("level", "info")
         await self.journal.emit(kind, message, level=level, data=data)
@@ -97,6 +93,7 @@ class Core:
             await s.commit()
         await self.catalog.ensure_default_profiles()
         await convert_legacy_reasons(self.db)
+        await self._drop_retired_source()
         await self._recover()
         await self.transfers.load_cancelled()
         await self.journal.emit("app.started", M("app.started"))
@@ -107,6 +104,7 @@ class Core:
             self._tasks.append(asyncio.create_task(self.hunter.loop()))
             self._tasks.append(asyncio.create_task(self._sync_loop()))
             self._tasks.append(asyncio.create_task(self._queue_loop()))
+            self._tasks.append(asyncio.create_task(self._ready_loop()))
             self._tasks.append(asyncio.create_task(self.discover.loop()))
             if self.env.forwarded_port_file:
                 self._tasks.append(asyncio.create_task(self._port_loop()))
@@ -246,28 +244,27 @@ class Core:
 
     async def _port_loop(self) -> None:
         """Behind gluetun: follows the port the VPN forwards (it changes on each reconnection)."""
-        waiting_logged = False
         while True:
             await asyncio.sleep(20)
             port = self._read_forwarded_port()
-            if port is None:
-                if not waiting_logged and not self.engine.forwarded_port:
-                    waiting_logged = True
-                    await self.journal.emit(
-                        "network.port_waiting", M("network.port_waiting", path=str(self.env.forwarded_port_file)),
-                        level="warning",
-                    )
+            if port == self.engine.forwarded_port:
                 continue
-            if port != self.engine.forwarded_port:
+            if port:
                 await self.journal.emit(
                     "network.port_forwarded", M("network.port_forwarded", port=port, previous=self.engine.forwarded_port or "—"),
                 )
-                await self.restart_engine()
+            await self.restart_engine()  # sans port : le moteur se coupe et attend
 
     async def restart_engine(self) -> None:
         cfg = (await self.settings.get()).soulseek
         if self.env.forwarded_port_file:
             self.engine.forwarded_port = self._read_forwarded_port()
+            if not self.engine.forwarded_port:
+                # Derrière le VPN, jamais sur le port configuré : personne ne pourrait nous joindre
+                waiting = M("network.port_waiting", path=str(self.env.forwarded_port_file))
+                await self.engine.hold(cfg, waiting)
+                await self.journal.emit("network.port_waiting", waiting, level="warning")
+                return
         rules = await self.shares.rules()
         pic = self.env.profile_picture_path
         self.engine.picture = pic.read_bytes() if pic.is_file() else None
@@ -275,6 +272,27 @@ class Core:
         await self.engine.start(cfg, rules)
         # Restart unfinished downloads (aioslsk keeps no state between runs)
         self._tasks.append(asyncio.create_task(self._resume_downloads()))
+
+    async def _drop_retired_source(self) -> None:
+        """Qobuz was removed as a download source: what it was still downloading is cancelled,
+        its albums still proposed are set aside (they can't be downloaded any more), and its
+        settings (the account token) are dropped from the database."""
+        retired = "qobuz:"
+        raw = await self.settings.get_raw(self.settings.KEY)
+        if raw and "qobuz" in raw:
+            await self.settings.save(await self.settings.get())
+        async with self.db.session() as s:
+            await s.execute(
+                update(Transfer)
+                .where(Transfer.remote_path.startswith(retired), Transfer.state.not_in(["complete", "failed", "aborted"]))
+                .values(state=TransferState.ABORTED, error=M("transfer.source_removed").text)
+            )
+            await s.execute(
+                update(Candidate)
+                .where(Candidate.directory.startswith(retired), Candidate.status.in_([CandidateStatus.PROPOSED, CandidateStatus.CHOSEN]))
+                .values(status=CandidateStatus.REJECTED)
+            )
+            await s.commit()
 
     async def _resume_downloads(self) -> None:
         async with self.db.session() as s:
@@ -290,18 +308,13 @@ class Core:
             )
         if not pending:
             return
-        # Qobuz needs no Soulseek connection: its downloads restart right away
-        qobuz = [t for t in pending if is_qobuz(t.remote_path)]
-        soulseek = [t for t in pending if not is_qobuz(t.remote_path)]
-        await self._restart(qobuz)
-        if soulseek:
-            for _ in range(60):
-                if self.engine.logged_in:
-                    break
-                await asyncio.sleep(2)
-            else:
-                return
-            await self._restart(soulseek)
+        for _ in range(60):
+            if self.engine.logged_in:
+                break
+            await asyncio.sleep(2)
+        else:
+            return
+        await self._restart(pending)
         await self.journal.emit("download.resumed", M("download.resumed", n=len(pending)))
 
     async def _restart(self, transfers: list[Transfer]) -> None:
@@ -312,9 +325,29 @@ class Core:
                 continue
             self.transfers.register("download", t.username, t.remote_path, t.id)
             try:
-                await self.backend(t.remote_path).download(t.username, t.remote_path, t.local_path.rsplit("/", 1)[0])
+                await self.engine.download(t.username, t.remote_path, t.local_path.rsplit("/", 1)[0])
             except Exception as e:
                 log.warning("resume %s: %s", t.remote_path, e)
+
+    async def _ready_tick(self) -> None:
+        """Safety net: every album still downloading whose tracks are all there is shelved,
+        whatever chain of events left it there."""
+        async with self.db.session() as s:
+            ids = list((await s.execute(
+                select(ReleaseGroup.id).where(ReleaseGroup.status == AlbumStatus.DOWNLOADING)
+            )).scalars())
+        for rid in ids:
+            await self.importer.import_if_ready(rid)
+
+    async def _ready_loop(self) -> None:
+        while True:
+            await asyncio.sleep(300)
+            try:
+                await self._ready_tick()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                log.exception("album safety net")
 
     async def _queue_loop(self) -> None:
         """Regularly asks peers for our position in their upload queue."""

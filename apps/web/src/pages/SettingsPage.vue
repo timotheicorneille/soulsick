@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { AppSettings, DownloadSource, QobuzQuality, QobuzTest, QualityProfile } from '@/lib/types'
+import type { AppSettings, QualityProfile } from '@/lib/types'
 import { PlusIcon } from '@lucide/vue'
 import { useMutation, useQueryClient } from '@tanstack/vue-query'
 import { computed, ref, watch } from 'vue'
@@ -14,16 +14,12 @@ import ThemeGallery from '@/components/ThemeGallery.vue'
 import { Button } from '@/components/ui/button'
 import { Field, FieldDescription, FieldGroup, FieldLabel, FieldSeparator, FieldSet, FieldLegend } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
-import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
-import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Spinner } from '@/components/ui/spinner'
 import { Switch } from '@/components/ui/switch'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { useFormats, useProfiles, useSettings, useStatus } from '@/composables/queries'
 import { api } from '@/lib/api'
-import { serverText } from '@/lib/serverText'
-import { cn } from '@/lib/utils'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { getLocalePref, LOCALES, type LocalePref, setLocalePref } from '@/i18n'
 import { getTheme, setTheme, type ThemePref } from '@/lib/theme'
@@ -68,21 +64,6 @@ const save = useMutation({
 const testNavidrome = useMutation({
   mutationFn: () => api.post<{ ok: boolean, error?: string }>('/settings/navidrome/test'),
   onSuccess: r => (r.ok ? toast.success(t('settings.navidrome.ok')) : toast.error('Navidrome', { description: r.error })),
-})
-
-const SOURCES: DownloadSource[] = ['soulseek', 'qobuz', 'qobuz_first']
-const QUALITIES: QobuzQuality[] = [27, 7, 6, 5]
-const qobuzResult = ref<QobuzTest | null>(null)
-const testQobuz = useMutation({
-  mutationFn: () => api.post<QobuzTest>('/settings/qobuz/test'),
-  onSuccess: (r) => {
-    qobuzResult.value = r
-    if (r.ok)
-      toast.success(t('settings.sources.ok', { user: r.user ?? '?', plan: r.subscription ?? '?' }))
-    else
-      toast.error('Qobuz', { description: r.error_t ? serverText(r.error ?? '', r.error_t) : r.error })
-  },
-  onError: e => toast.error(e.message),
 })
 
 // Naming template preview, computed like the server does
@@ -143,9 +124,6 @@ const removeProfile = useMutation({
       <TabsList class="flex-wrap">
         <TabsTrigger value="soulseek">
           Soulseek
-        </TabsTrigger>
-        <TabsTrigger value="sources">
-          {{ t('settings.tabs.sources') }}
         </TabsTrigger>
         <TabsTrigger value="hunter">
           {{ t('settings.tabs.hunter') }}
@@ -358,6 +336,12 @@ const removeProfile = useMutation({
                 {{ t('settings.library.embedCover') }}
               </FieldLabel>
             </Field>
+            <Field orientation="horizontal">
+              <Switch id="fl" v-model="form.library.fetch_lyrics" />
+              <FieldLabel for="fl">
+                {{ t('settings.library.fetchLyrics') }}
+              </FieldLabel>
+            </Field>
           </div>
           <Field class="sm:max-w-xs">
             <FieldLabel for="si">
@@ -395,99 +379,6 @@ const removeProfile = useMutation({
           <PlusIcon data-icon="inline-start" />
           {{ t('settings.profiles.new') }}
         </Button>
-      </TabsContent>
-
-      <TabsContent value="sources" class="max-w-2xl">
-        <FieldGroup>
-          <FieldSet>
-            <FieldLegend>{{ t('settings.sources.source') }}</FieldLegend>
-            <RadioGroup v-model="form.hunter.source" class="gap-2">
-              <label
-                v-for="s in SOURCES"
-                :key="s"
-                :for="`src-${s}`"
-                :class="cn('flex cursor-pointer items-start gap-3 rounded-lg border px-3.5 py-3 transition-colors hover:bg-accent/40', form.hunter.source === s && 'border-primary/50 bg-primary/[0.04]')"
-              >
-                <RadioGroupItem :id="`src-${s}`" :value="s" class="mt-0.5" />
-                <span class="flex flex-col gap-0.5">
-                  <span class="text-[13px] font-medium">{{ t(`settings.sources.options.${s}.label`) }}</span>
-                  <span class="text-[12px] text-muted-foreground">{{ t(`settings.sources.options.${s}.hint`) }}</span>
-                </span>
-              </label>
-            </RadioGroup>
-          </FieldSet>
-          <FieldSeparator />
-          <FieldSet>
-            <FieldLegend>Qobuz</FieldLegend>
-            <FieldDescription>{{ t('settings.sources.tokenIntro') }}</FieldDescription>
-            <Field>
-              <FieldLabel for="qt">
-                {{ t('settings.sources.token') }}
-              </FieldLabel>
-              <Input id="qt" v-model="form.qobuz.token" type="password" autocomplete="off" class="font-mono" />
-              <FieldDescription>{{ t('settings.sources.tokenHint') }}</FieldDescription>
-            </Field>
-            <Field>
-              <FieldLabel for="qq">
-                {{ t('settings.sources.quality') }}
-              </FieldLabel>
-              <Select :model-value="String(form.qobuz.quality)" @update:model-value="(v) => (form!.qobuz.quality = Number(v) as QobuzQuality)">
-                <SelectTrigger id="qq" class="w-full sm:max-w-sm">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectGroup>
-                    <SelectItem v-for="q in QUALITIES" :key="q" :value="String(q)">
-                      {{ t(`settings.sources.qualities.q${q}`) }}
-                    </SelectItem>
-                  </SelectGroup>
-                </SelectContent>
-              </Select>
-              <FieldDescription>{{ t('settings.sources.qualityHint') }}</FieldDescription>
-            </Field>
-            <details class="group">
-              <summary class="cursor-pointer text-[12.5px] text-muted-foreground hover:text-foreground">
-                {{ t('settings.sources.advanced') }}
-              </summary>
-              <div class="mt-3 flex flex-col gap-3">
-                <FieldDescription>{{ t('settings.sources.advancedHint') }}</FieldDescription>
-                <div class="grid gap-4 sm:grid-cols-2">
-                  <Field>
-                    <FieldLabel for="qa">
-                      App ID
-                    </FieldLabel>
-                    <Input id="qa" v-model="form.qobuz.app_id" autocomplete="off" class="font-mono" :placeholder="t('settings.sources.auto')" />
-                  </Field>
-                  <Field>
-                    <FieldLabel for="qs">
-                      {{ t('settings.sources.secret') }}
-                    </FieldLabel>
-                    <Input id="qs" v-model="form.qobuz.app_secret" type="password" autocomplete="off" class="font-mono" :placeholder="t('settings.sources.auto')" />
-                  </Field>
-                </div>
-              </div>
-            </details>
-            <div class="flex flex-wrap items-center gap-3">
-              <Button variant="outline" size="sm" class="w-fit" :disabled="dirty || !form.qobuz.token || testQobuz.isPending.value" @click="testQobuz.mutate()">
-                <Spinner v-if="testQobuz.isPending.value" data-icon="inline-start" />
-                {{ t('settings.sources.test') }}
-              </Button>
-              <span v-if="qobuzResult?.ok" class="text-[12.5px] text-success">
-                {{ t('settings.sources.ok', { user: qobuzResult.user ?? '?', plan: qobuzResult.subscription ?? '?' }) }}
-                <template v-if="!qobuzResult.hires"> · {{ t('settings.sources.noHires') }}</template>
-              </span>
-              <span v-else-if="qobuzResult" class="text-[12.5px] text-destructive">
-                {{ qobuzResult.error_t ? serverText(qobuzResult.error ?? '', qobuzResult.error_t) : qobuzResult.error }}
-              </span>
-            </div>
-            <FieldDescription v-if="dirty">
-              {{ t('settings.navidrome.saveFirst') }}
-            </FieldDescription>
-            <FieldDescription class="text-warning/90">
-              {{ t('settings.sources.tos') }}
-            </FieldDescription>
-          </FieldSet>
-        </FieldGroup>
       </TabsContent>
 
       <TabsContent value="navidrome" class="max-w-2xl">

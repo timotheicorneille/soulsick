@@ -129,8 +129,12 @@ class FakeEngine(SlskEngine):
         name = remote_path.replace("\\", "/").rsplit("/", 1)[-1]
         local = os.path.join(dest_dir, name)
         title = name.split(" - ", 1)[-1].rsplit(".", 1)[0]
-        seconds = next((ln // 1000 for t, ln in TRACKS if t == title), 200)
-        tiny_flac(Path(local), seconds)
+        if name.endswith(".lrc"):
+            Path(local).parent.mkdir(parents=True, exist_ok=True)
+            Path(local).write_text(f"[00:01.00] {title}\n")
+        else:
+            seconds = next((ln // 1000 for t, ln in TRACKS if t == title), 200)
+            tiny_flac(Path(local), seconds)
 
         outcomes = self.script.get(f"{username}:{name}", self.script.get(name, []))
         outcome = outcomes.pop(0) if outcomes else "complete"

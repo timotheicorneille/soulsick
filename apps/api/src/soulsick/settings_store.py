@@ -1,6 +1,5 @@
 """Réglages applicatifs persistés en base (modifiables depuis l'interface)."""
 
-from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -30,8 +29,6 @@ class HunterSettings(BaseModel):
     proposals: int = 5
     min_match: float = 0.6
     download_covers: bool = True
-    # Where albums are downloaded from: Soulseek, Qobuz, or Qobuz first with Soulseek as a fallback
-    source: Literal["soulseek", "qobuz", "qobuz_first"] = "soulseek"
     # When an album download counts as stuck (shown to you, nothing automatic)
     stuck_no_progress_minutes: int = Field(10, ge=1)
     stuck_queue_minutes: int = Field(30, ge=1)
@@ -44,6 +41,8 @@ class LibrarySettings(BaseModel):
     sync_interval_hours: int = 24
     write_tags: bool = True
     embed_cover: bool = True
+    # Lyrics from LRCLIB for the tracks without, after each import
+    fetch_lyrics: bool = True
 
 
 class NavidromeSettings(BaseModel):
@@ -53,22 +52,11 @@ class NavidromeSettings(BaseModel):
     password: str = ""
 
 
-class QobuzSettings(BaseModel):
-    # user_auth_token of the web player (play.qobuz.com); email/password sign-in is gone
-    token: str = ""
-    # Qobuz format id: 27 = 24-bit up to 192 kHz, 7 = 24-bit up to 96 kHz, 6 = CD, 5 = MP3 320
-    quality: Literal[27, 7, 6, 5] = 27
-    # Forced app id / secret; empty = read from the web player
-    app_id: str = ""
-    app_secret: str = ""
-
-
 class AppSettings(BaseModel):
     soulseek: SoulseekSettings = Field(default_factory=SoulseekSettings)
     hunter: HunterSettings = Field(default_factory=HunterSettings)
     library: LibrarySettings = Field(default_factory=LibrarySettings)
     navidrome: NavidromeSettings = Field(default_factory=NavidromeSettings)
-    qobuz: QobuzSettings = Field(default_factory=QobuzSettings)
 
 
 class SettingsStore:

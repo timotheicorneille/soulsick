@@ -1,6 +1,7 @@
 """Lecture et écriture des tags audio (mutagen), compatibles Picard / Navidrome."""
 
 import logging
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -12,6 +13,11 @@ from mutagen.mp4 import MP4, MP4Cover
 from .quality import FileInfo, detect_format, extension_of
 
 log = logging.getLogger(__name__)
+
+# Paroles intégrées : jamais effacées par write_tags (elles ont pu être recalées à la main)
+VORBIS_LYRICS = {"LYRICS", "UNSYNCEDLYRICS", "SYNCEDLYRICS"}
+MP4_LYRICS = "\xa9lyr"
+_LRC_TIME = re.compile(r"\[\d{1,3}:\d{2}(?:[.:]\d{1,3})?\]")
 
 
 @dataclass
@@ -28,6 +34,31 @@ class AudioMeta:
     release_group_mbid: str | None = None
     release_mbid: str | None = None
     recording_mbid: str | None = None
+    lyrics: str | None = None  # paroles intégrées : « synced », « plain » ou rien
+
+
+def _lyrics_kind(texts: list[str]) -> str | None:
+    texts = [x for x in texts if x and x.strip()]
+    if not texts:
+        return None
+    return "synced" if any(_LRC_TIME.search(x) for x in texts) else "plain"
+
+
+def embedded_lyrics(raw) -> str | None:
+    """Paroles intégrées au fichier (déjà ouvert par mutagen) : « synced », « plain » ou None."""
+    tags = getattr(raw, "tags", None)
+    if tags is None:
+        return None
+    if isinstance(tags, ID3):
+        if tags.getall("SYLT"):
+            return "synced"
+        return _lyrics_kind([str(f) for f in tags.getall("USLT")])
+    if isinstance(raw, MP4):
+        return _lyrics_kind([str(v) for v in tags.get(MP4_LYRICS, [])])
+    try:
+        return _lyrics_kind([v for k in tags.keys() if k.upper() in VORBIS_LYRICS for v in tags[k]])
+    except Exception:
+        return None
 
 
 def _first(tags, key: str) -> str | None:
@@ -58,6 +89,7 @@ def read_meta(path: str | Path) -> AudioMeta:
         return meta
     if raw is None:
         return meta
+    meta.lyrics = embedded_lyrics(raw)
     info = getattr(raw, "info", None)
     ext = extension_of(str(path))
     if info is not None:
@@ -144,16 +176,22 @@ def _vorbis_map(t: TagSet) -> dict[str, str]:
     }
 
 
+def _vorbis_lyrics(tags) -> list[tuple[str, list[str]]]:
+    return [(k, list(tags[k])) for k in tags.keys() if k.upper() in VORBIS_LYRICS] if tags else []
+
+
 def write_tags(path: str | Path, t: TagSet, cover: bytes | None = None) -> None:
-    """Remplace les tags du fichier par ceux issus de MusicBrainz (+ pochette embarquée)."""
+    """Remplace les tags du fichier par ceux issus de MusicBrainz (+ pochette embarquée).
+    Les paroles intégrées sont gardées."""
     path = str(path)
     ext = extension_of(path)
     vmap = {k: v for k, v in _vorbis_map(t).items() if v}
 
     if ext == "flac":
         f = FLAC(path)
+        kept = _vorbis_lyrics(f.tags)
         f.delete()
-        for k, v in vmap.items():
+        for k, v in [*vmap.items(), *kept]:
             f[k] = v
         if cover:
             f.clear_pictures()
@@ -172,8 +210,9 @@ def write_tags(path: str | Path, t: TagSet, cover: bytes | None = None) -> None:
             return
         if f.tags is None:
             f.add_tags()
+        kept = _vorbis_lyrics(f.tags)
         f.tags.clear()
-        for k, v in vmap.items():
+        for k, v in [*vmap.items(), *kept]:
             f.tags[k] = v
         f.save()
         return
@@ -182,9 +221,11 @@ def write_tags(path: str | Path, t: TagSet, cover: bytes | None = None) -> None:
         from mutagen.easyid3 import EasyID3
 
         try:
-            ID3(path).delete()
+            old = ID3(path)
+            kept = old.getall("USLT") + old.getall("SYLT")
+            old.delete()
         except ID3NoHeaderError:
-            pass
+            kept = []
         e = EasyID3()
         e["title"] = t.title
         e["artist"] = t.artist
@@ -209,12 +250,17 @@ def write_tags(path: str | Path, t: TagSet, cover: bytes | None = None) -> None:
             id3.add(TXXX(encoding=3, desc="MusicBrainz Album Type", text=[t.releasetype]))
         if cover:
             id3.add(APIC(encoding=3, mime="image/jpeg", type=3, desc="Cover", data=cover))
+        for frame in kept:
+            id3.add(frame)
         id3.save(v2_version=4)
         return
 
     if ext in {"m4a", "alac", "aac", "mp4"}:
         f = MP4(path)
+        kept = (f.tags or {}).get(MP4_LYRICS)
         f.delete()
+        if kept:
+            f[MP4_LYRICS] = kept
         f["\xa9nam"] = t.title
         f["\xa9ART"] = t.artist
         f["\xa9alb"] = t.album

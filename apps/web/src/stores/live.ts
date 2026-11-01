@@ -1,5 +1,5 @@
 import type { QueryClient } from '@tanstack/vue-query'
-import type { ChatMessage, EngineStatus, HunterState, JournalEvent, LogLine, Transfer } from '@/lib/types'
+import type { ChatMessage, EngineStatus, HunterState, JournalEvent, LogLine, LyricsJob, Transfer } from '@/lib/types'
 import { defineStore } from 'pinia'
 import { reactive, ref, shallowRef } from 'vue'
 import { toast } from 'vue-sonner'
@@ -18,6 +18,7 @@ type Msg
     | { type: 'chat_read', data: { kind: string, target: string } }
     | { type: 'chat_rooms', data: { rooms: string[] } }
     | { type: 'library_guard', data: unknown }
+    | { type: 'lyrics', data: LyricsJob }
 
 /** Real-time stream: network status, current hunt, journal, transfer progress. */
 export const useLive = defineStore('live', () => {
@@ -34,6 +35,8 @@ export const useLive = defineStore('live', () => {
   const chat = shallowRef<ChatMessage[]>([])
   /** Conversation currently on screen: no notification for it */
   const chatOpen = ref<{ kind: string, target: string } | null>(null)
+  /** The pass looking for missing lyrics (Library), as it goes */
+  const lyricsJob = ref<LyricsJob | null>(null)
   /** Short speed history for the sidebar meter */
   const speedHistory = ref<{ down: number, up: number }[]>([])
 
@@ -107,6 +110,10 @@ export const useLive = defineStore('live', () => {
       case 'existing':
         invalidate('existing')
         break
+      case 'lyrics':
+        lyricsJob.value = msg.data
+        invalidate('album', 'albums')
+        break
       case 'library_guard':
         invalidate('status', 'storage')
         break
@@ -156,5 +163,5 @@ export const useLive = defineStore('live', () => {
       events.value = list
   }
 
-  return { engine, hunter, events, logs, unseenProblems, chat, chatOpen, transfers, connected, speedHistory, connect, disconnect, seedEvents, seedLogs }
+  return { engine, hunter, events, logs, unseenProblems, chat, chatOpen, transfers, connected, speedHistory, lyricsJob, connect, disconnect, seedEvents, seedLogs }
 })

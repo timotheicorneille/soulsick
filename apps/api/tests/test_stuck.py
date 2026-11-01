@@ -169,3 +169,47 @@ async def test_changement_refuse(ctx):  # noqa: F811
     assert (await client.post(f"/api/candidates/{good['id']}/switch", json={"to": 9999})).status_code == 400
     # Ni cible ni recherche
     assert (await client.post(f"/api/candidates/{good['id']}/switch", json={})).status_code == 422
+
+
+
+async def test_retour_a_un_pair_deja_quitte_l_album_est_range(ctx):  # noqa: F811
+    """Aller-retour entre deux pairs qui tardent : une fois tout reçu, l'album est rangé.
+    Le pair repris garde des fichiers annulés d'avant (livrés depuis par l'autre pair) :
+    ils ne doivent pas le faire échouer."""
+    client, core, engine, env = ctx
+    file3 = f"03 - {TRACKS[2][0]}.flac"
+    await client.post("/api/auth/setup", json={"username": "admin", "password": "motdepasse"})
+    r = await client.post("/api/artists", json={"mbid": "x", "mode": "validation", "primary_types": ["album"], "monitor": "all"})
+    rid = next(rg["id"] for rg in (await client.get(f"/api/artists/{r.json()['id']}")).json()["release_groups"]
+               if rg["title"] == "Nevermind")
+    engine.results = [peer_with_album("goodpeer"), peer_with_album("otherpeer")]
+    # goodpeer n'envoie que la piste 1 ; otherpeer, que la 3
+    engine.script[f"goodpeer:{FILE2}"] = ["hold"]
+    engine.script[f"goodpeer:{file3}"] = ["hold"]
+    engine.script[f"otherpeer:{FILE2}"] = ["hold"]
+    await core.hunter.hunt(rid)
+    cands = (await client.get(f"/api/albums/{rid}")).json()["candidates"]
+    good = next(c for c in cands if c["username"] == "goodpeer")
+    other = next(c for c in cands if c["username"] == "otherpeer")
+    await client.post(f"/api/candidates/{good['id']}/approve")
+
+    def complete(cid, n):
+        async def check():
+            async with core.db.session() as s:
+                ts = list((await s.execute(select(Transfer).where(Transfer.candidate_id == cid))).scalars())
+            return sum(t.state == "complete" for t in ts) == n
+        return check
+
+    await wait_for(complete(good["id"], 1))
+    r = await client.post(f"/api/candidates/{good['id']}/switch", json={"to": other["id"]})
+    assert r.status_code == 200 and r.json()["files"] == 2, r.text
+    await wait_for(complete(other["id"], 1))
+
+    # Retour à goodpeer pour la piste 2, qu'il envoie cette fois ; sa piste 3 annulée ne compte plus
+    r = await client.post(f"/api/candidates/{other['id']}/switch", json={"to": good["id"]})
+    assert r.status_code == 200 and r.json()["files"] == 1, r.text
+
+    async def imported():
+        return (await client.get(f"/api/albums/{rid}")).json()["status"] == "imported"
+
+    await wait_for(imported)

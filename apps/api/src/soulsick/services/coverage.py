@@ -118,6 +118,25 @@ class CoverageService:
                 }
             )
 
+        if offers != 0:
+            # Who else has each track, to take it from them (« Prendre chez… »): any peer of this
+            # album but the one already bringing it
+            holders: dict[int, list[dict]] = {t["track_id"]: [] for t in tracks}
+            providers = {
+                (t["track_id"], x["candidate_id"]) for t in tracks for x in t["sources"]
+                if x["state"] == "complete" or x["state"] in ACTIVE
+            }
+            for c in sorted(cands, key=lambda c: -c.score)[:60]:
+                for tid, f in _track_map(c, release, artist.name).items():
+                    if (tid, c.id) not in providers:
+                        holders[tid].append({
+                            "candidate_id": c.id, "username": c.username, "status": c.status,
+                            "format": f.get("format") or c.format, "filename": f["filename"],
+                            "has_free_slots": c.has_free_slots, "queue_size": c.queue_size, "avg_speed": c.avg_speed,
+                        })
+            for t in tracks:
+                t["holders"] = sorted(holders[t["track_id"]], key=lambda h: not h["has_free_slots"])[:6]
+
         missing_ids = {t["track_id"] for t in tracks if t["state"] == "missing"}
         # Tracks to upgrade, with the format they have now: only better files are offered
         upgrade_fmt = {t["track_id"]: t["library_format"] for t in tracks if t["upgrade"]}

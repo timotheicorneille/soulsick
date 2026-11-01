@@ -42,3 +42,32 @@ async def test_core_follows_the_forwarded_port(tmp_path):
             # Garbage or an empty file: no port (the configured one is used meanwhile)
             port_file.write_text("")
             assert core._read_forwarded_port() is None
+
+
+async def test_no_forwarded_port_keeps_soulseek_offline(tmp_path):
+    """Without a port from the VPN, nobody could reach us: the engine waits instead of connecting."""
+    port_file = tmp_path / "forwarded_port"
+    env = Env(config_dir=tmp_path / "config", music_dir=tmp_path / "music", downloads_dir=tmp_path / "downloads",
+              forwarded_port_file=port_file)
+    engine = FakeEngine(str(env.downloads_dir))
+    started = []
+    engine.start = lambda cfg, shares: started.append(cfg) or _done()
+    core = Core(env, mb=FakeMB(env.covers_dir), engine=engine)
+    app = create_app(env, core)
+    async with app.router.lifespan_context(app):
+        assert not started and not engine.logged_in
+        assert engine.error.key == "network.port_waiting"
+
+        port_file.write_text("41234")
+        await core.restart_engine()
+        assert len(started) == 1 and engine.forwarded_port == 41234
+
+        # gluetun loses the tunnel and clears the file: Soulseek goes offline again
+        port_file.write_text("")
+        await core.restart_engine()
+        assert len(started) == 1 and engine.forwarded_port is None
+        assert engine.error.key == "network.port_waiting"
+
+
+async def _done():
+    return None

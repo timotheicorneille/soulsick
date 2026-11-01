@@ -18,9 +18,9 @@ import { Spinner } from '@/components/ui/spinner'
 import { api } from '@/lib/api'
 
 /**
- * Get this album again from Qobuz: what is downloading is dropped, the best Qobuz version starts
- * right away, and the shelved files are replaced once it's imported (nothing goes if Qobuz
- * doesn't have the album).
+ * Get this album again: what is downloading is dropped, the best version found on Soulseek starts
+ * right away, and the shelved files are replaced once it's imported (nothing goes if nobody
+ * has the album).
  */
 const props = defineProps<{ albumId: number, format?: string | null, downloading?: boolean }>()
 const emit = defineEmits<{ done: [] }>()
@@ -32,7 +32,7 @@ async function confirm() {
   open.value = false
   busy.value = true
   try {
-    await api.post(`/albums/${props.albumId}/redownload`, { source: 'qobuz' })
+    await api.post(`/albums/${props.albumId}/redownload`)
     toast.success(t('redownload.started'), { description: t('redownload.startedHint') })
     emit('done')
   }

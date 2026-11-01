@@ -16,7 +16,7 @@ import { cn } from '@/lib/utils'
 const { t } = useI18n()
 const { data: artists, isPending } = useArtists()
 const q = ref('')
-const filter = ref<'all' | 'attention' | 'auto' | 'paused'>('all')
+const filter = ref<'all' | 'followed' | 'paused' | 'attention' | 'auto'>('all')
 const addOpen = ref(false)
 
 const list = computed(() => {
@@ -24,6 +24,8 @@ const list = computed(() => {
   return (artists.value ?? []).filter((a) => {
     if (needle && !a.name.toLowerCase().includes(needle))
       return false
+    if (filter.value === 'followed')
+      return a.monitored
     if (filter.value === 'attention')
       return a.stats.attention > 0
     if (filter.value === 'auto')
@@ -61,14 +63,17 @@ function completion(a: { stats: { imported: number, monitored: number } }) {
         <ToggleGroupItem value="all">
           {{ t('common.all') }}
         </ToggleGroupItem>
+        <ToggleGroupItem value="followed">
+          {{ t('artists.filters.followed') }}
+        </ToggleGroupItem>
+        <ToggleGroupItem value="paused">
+          {{ t('artists.filters.paused') }}
+        </ToggleGroupItem>
         <ToggleGroupItem value="attention">
           {{ t('artists.filters.attention') }}
         </ToggleGroupItem>
         <ToggleGroupItem value="auto">
           {{ t('artists.filters.auto') }}
-        </ToggleGroupItem>
-        <ToggleGroupItem value="paused">
-          {{ t('artists.filters.paused') }}
         </ToggleGroupItem>
       </ToggleGroup>
       <span class="font-mono text-[11.5px] text-faint tnum sm:ml-auto">{{ list.length }} / {{ artists?.length ?? 0 }}</span>

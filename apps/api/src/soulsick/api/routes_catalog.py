@@ -26,7 +26,6 @@ from ..models import (
     of_artist,
 )
 from ..musicbrainz import MusicBrainzError
-from ..services.qobuz import QobuzError
 from ..slsk.engine import EngineUnavailable
 from ..services.transfers import transfer_to_dict
 from .deps import get_core, require_user
@@ -481,20 +480,21 @@ async def hunt_album(rid: int, core: Core = Depends(get_core)) -> dict:
     return {"ok": True}
 
 
-class RedownloadIn(BaseModel):
-    source: Literal["qobuz", "soulseek"] = "qobuz"
+@router.post("/albums/{rid}/lyrics")
+async def fetch_album_lyrics(rid: int, core: Core = Depends(get_core)) -> dict:
+    """Lyrics from LRCLIB for the album's tracks without, now (even those tried recently)."""
+    async with core.db.session() as s:
+        rg = await s.get(ReleaseGroup, rid)
+        if not rg:
+            raise HTTPException(404)
+    return await core.lyrics.fetch_album(rg.mbid, by_user=True)
 
 
 @router.post("/albums/{rid}/redownload")
-async def redownload_album(rid: int, body: RedownloadIn, core: Core = Depends(get_core)) -> dict:
-    """Download this album again from a source; the shelved files are replaced once it's imported."""
-    if body.source == "qobuz":
-        try:
-            await core.qobuz.app()  # no token, refused token…: said now, before dropping anything
-        except QobuzError as e:
-            raise http_error(400, e.msg) from e
+async def redownload_album(rid: int, core: Core = Depends(get_core)) -> dict:
+    """Download this album again; the shelved files are replaced once it's imported."""
     try:
-        n = await core.hunter.redownload(rid, body.source)
+        n = await core.hunter.redownload(rid)
     except ValueError as e:
         raise as_http(e, 404) from e
     return {"ok": True, "dropped": n}
@@ -627,6 +627,24 @@ async def complete(rid: int, body: CompleteIn, core: Core = Depends(get_core)) -
     except EngineUnavailable as e:
         raise as_http(e) from e
     return {"ok": True, "files": n}
+
+
+class TakeIn(BaseModel):
+    candidate_id: int
+
+
+@router.post("/albums/{rid}/tracks/{tid}/take")
+async def take_track(rid: int, tid: int, body: TakeIn, core: Core = Depends(get_core)) -> dict:
+    """« Prendre chez… »: this track from this peer, now, even mid-download."""
+    async with core.db.session() as s:
+        c = await s.get(Candidate, body.candidate_id)
+        if not c or c.release_group_id != rid:
+            raise HTTPException(404)
+    try:
+        await core.hunter.take_track(rid, tid, body.candidate_id)
+    except (ValueError, EngineUnavailable) as e:
+        raise as_http(e) from e
+    return {"ok": True}
 
 
 @router.get("/candidates/{cid}/plan")

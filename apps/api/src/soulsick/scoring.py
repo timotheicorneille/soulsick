@@ -9,12 +9,13 @@ Score sur 100 :
 import re
 from dataclasses import dataclass, field
 
+from .lyrics import DOWNLOADED_LYRICS
 from .matching import FileRef, MatchResult, TrackRef, match_files, normalize
 from .messages import M, Msg
 from .quality import FORMAT_LABELS, FileInfo, detect_format, extension_of, format_rank, is_audio, worst_format
 
 _DISC_DIR = re.compile(r"^(?:cd|disc|disk)\s*\d+$", re.I)
-EXTRA_EXTENSIONS = {"jpg", "jpeg", "png", "cue", "log"}
+EXTRA_EXTENSIONS = {"jpg", "jpeg", "png", "cue", "log", *DOWNLOADED_LYRICS}
 
 
 @dataclass

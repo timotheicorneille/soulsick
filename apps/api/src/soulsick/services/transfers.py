@@ -292,9 +292,17 @@ class TransferService:
             self._pending.discard(tid)
             # Before this album's import, which moves the file away
             await self._settle_twins(tid, u)
-        if u.state in TERMINAL and data["candidate_id"]:
+        if u.state in TERMINAL and (data["candidate_id"] or data["release_group_id"]):
             # Outside the lock: what follows (import, fallback) starts transfers again
-            asyncio.create_task(self.core.hunter.on_transfer_terminal(data["candidate_id"]))
+            asyncio.create_task(self._after_terminal(data["candidate_id"], data["release_group_id"]))
+
+    async def _after_terminal(self, candidate_id: int | None, rg_id: int | None) -> None:
+        """A file of an album reached its end: its source is judged (retry, relay, done), then
+        the album rule — every track there and nothing in flight — shelves it whatever happened."""
+        if candidate_id:
+            await self.core.hunter.on_transfer_terminal(candidate_id)
+        if rg_id:
+            await self.core.importer.import_if_ready(rg_id)
 
     async def _journal(self, t: dict, prev: str) -> None:
         name = t["remote_path"].replace("\\", "/").rsplit("/", 1)[-1]
@@ -347,7 +355,7 @@ class TransferService:
         self._live.pop(tid, None)
         self.core.hub.publish("transfer", data)
         dest = os.path.dirname(t.local_path) if t.local_path else os.path.join(str(self.core.env.downloads_dir), "manual")
-        await self.core.backend(t.remote_path).download(t.username, t.remote_path, dest)
+        await self.core.engine.download(t.username, t.remote_path, dest)
         return t
 
     async def pause(self, tid: int) -> bool:
@@ -357,7 +365,7 @@ class TransferService:
             if not t or t.direction != "download" or t.state in TERMINAL or t.state == TransferState.PAUSED:
                 return False
             username, path = t.username, t.remote_path
-        await self.core.backend(path).pause(username, path, "download")
+        await self.core.engine.pause(username, path, "download")
         async with self.core.db.session() as s:
             t = await s.get(Transfer, tid)
             assert t
@@ -384,7 +392,7 @@ class TransferService:
         self.register("download", username, path, tid)
         self.core.hub.publish("transfer", data)
         dest = os.path.dirname(local) if local else os.path.join(str(self.core.env.downloads_dir), "manual")
-        await self.core.backend(path).download(username, path, dest)
+        await self.core.engine.download(username, path, dest)
         return True
 
     async def load_cancelled(self) -> None:
@@ -463,8 +471,8 @@ class TransferService:
 
     async def stop_on_engine(self, username: str, path: str, direction: str = "download") -> None:
         """Aborts on the engine side and drops it from the engine's list (it won't come back)."""
-        backend = self.core.backend(path)
-        for step in (backend.abort, backend.remove):
+        engine = self.core.engine
+        for step in (engine.abort, engine.remove):
             try:
                 await step(username, path, direction)
             except Exception as e:  # offline, or unknown to the engine

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import logging
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
@@ -9,11 +11,15 @@ from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
 from ..messages import M, set_reason
-from ..models import AlbumStatus, Artist, ArtistReleaseGroup, QualityProfile, Release, ReleaseGroup, Track, of_artist
+from ..models import (
+    AlbumStatus, Artist, ArtistReleaseGroup, LibraryFile, QualityProfile, Release, ReleaseGroup, Track, of_artist,
+)
 from ..musicbrainz import pick_default_release
 
 if TYPE_CHECKING:
     from ..core import Core
+
+log = logging.getLogger(__name__)
 
 DEFAULT_PROFILES = [
     ("Lossless", ["flac-24", "flac", "alac", "wav"], "flac"),
@@ -58,6 +64,7 @@ def _set_monitored(rg: ReleaseGroup, monitored: bool) -> bool:
 class CatalogService:
     def __init__(self, core: Core) -> None:
         self.core = core
+        self._from_library = asyncio.Lock()
 
     async def ensure_default_profiles(self) -> None:
         async with self.core.db.session() as s:
@@ -77,11 +84,24 @@ class CatalogService:
         secondary_types: list[str],
         monitor: str = "none",  # none | future | all — par défaut rien : tu choisis ensuite
     ) -> Artist:
+        a, created = await self._create_artist(
+            mbid, mode=mode, quality_profile_id=quality_profile_id,
+            primary_types=primary_types, secondary_types=secondary_types,
+        )
+        if created:
+            await self.sync_artist(a.id, initial_monitor=monitor)
+        return a
+
+    async def _create_artist(
+        self, mbid: str, *, mode: str, quality_profile_id: int | None,
+        primary_types: list[str], secondary_types: list[str], monitored: bool = True, announce: bool = True,
+    ) -> tuple[Artist, bool]:
+        """Fiche de l'artiste seule (une requête MusicBrainz), sans sa discographie."""
         info = await self.core.mb.get_artist(mbid)
         async with self.core.db.session() as s:
             existing = (await s.execute(select(Artist).where(Artist.mbid == mbid))).scalar_one_or_none()
             if existing:
-                return existing
+                return existing, False
             a = Artist(
                 mbid=mbid,
                 name=info["name"],
@@ -93,33 +113,93 @@ class CatalogService:
                 quality_profile_id=quality_profile_id,
                 primary_types=primary_types,
                 secondary_types=secondary_types,
+                monitored=monitored,
             )
             s.add(a)
             await s.commit()
             await s.refresh(a)
+        if not announce:
+            self.core.discover.soon()
+            return a, True
         await self.core.journal.emit(
             "artist.added",
             M("artist.added", name=a.name, mode=M("word.automatic" if mode == "auto" else "word.ask_me")),
             artist_id=a.id,
             data={"mbid": mbid, "primary_types": primary_types, "secondary_types": secondary_types},
         )
-        await self.sync_artist(a.id, initial_monitor=monitor)
-        return a
+        self.core.discover.soon()
+        return a, True
 
-    async def add_artists(self, mbids: list[str], **settings) -> int:
-        """Follows several artists with the same settings, one after the other (MusicBrainz
-        allows one request per second). One that fails doesn't stop the others."""
-        added = 0
+    async def add_artists(self, mbids: list[str], *, monitor: str = "none", **settings) -> int:
+        """Follows several artists with the same settings (MusicBrainz allows one request per
+        second). Every artist is created first, a second each, so they all show up quickly;
+        the discographies, several requests each, come after. One that fails doesn't stop the others."""
+        created: list[int] = []
         for mbid in mbids:
             try:
-                await self.add_artist(mbid, **settings)
-                added += 1
+                a, new = await self._create_artist(mbid, **settings)
             except Exception as e:
                 await self.core.journal.emit(
                     "musicbrainz.sync_failed", M("musicbrainz.sync_failed", name=mbid, error=str(e)),
                     level="error",
                 )
-        return added
+                continue
+            if new:
+                created.append(a.id)
+        for aid in created:
+            await self.sync_artist(aid, initial_monitor=monitor)  # gère ses propres erreurs
+        return len(created)
+
+    async def from_library(self) -> int:
+        """Albums of /music tagged with MusicBrainz ids (beets, Picard…) but not in the catalog: added,
+        with their artist, NOT followed — nothing is downloaded, no whole discography. A library
+        plugged in shows up as it is; following an artist stays your choice. Returns how many."""
+        async with self._from_library:
+            async with self.core.db.session() as s:
+                known = set((await s.execute(select(ReleaseGroup.mbid))).scalars())
+                present = set((await s.execute(
+                    select(LibraryFile.release_group_mbid).where(LibraryFile.release_group_mbid.is_not(None)).distinct()
+                )).scalars())
+            todo = sorted(present - known)
+            touched: set[int] = set()
+            artists_added = albums_added = 0
+            for mbid in todo:
+                try:
+                    g = await self.core.mb.get_release_group(mbid)  # one request each (1/s): in the background
+                    if not g.get("artist_mbid"):
+                        continue
+                    async with self.core.db.session() as s:
+                        artist = (await s.execute(select(Artist).where(Artist.mbid == g["artist_mbid"]))).scalar_one_or_none()
+                    if artist is None:
+                        artist, _ = await self._create_artist(
+                            g["artist_mbid"], mode="validation", quality_profile_id=None,
+                            primary_types=["album", "ep"], secondary_types=[], monitored=False, announce=False,
+                        )
+                        artists_added += 1
+                except Exception as e:  # MusicBrainz unavailable: this album is tried again next scan
+                    log.info("catalog from library, %s: %s", mbid, e)
+                    continue
+                async with self.core.db.session() as s:
+                    rg = ReleaseGroup(
+                        mbid=mbid, artist_id=artist.id, title=g["title"], primary_type=g["primary_type"],
+                        secondary_types=g["secondary_types"], first_release_date=g["first_release_date"],
+                        monitored=False, status=AlbumStatus.IGNORED,
+                    )
+                    s.add(rg)
+                    await s.flush()
+                    s.add(ArtistReleaseGroup(artist_id=artist.id, release_group_id=rg.id))
+                    await s.commit()
+                touched.add(artist.id)
+                albums_added += 1
+            for aid in touched:
+                await self.core.library.refresh_artist(aid)  # their files: « imported », where they are
+        if albums_added:
+            await self.core.journal.emit(
+                "library.cataloged",
+                M("library.cataloged", albums=albums_added, artists=artists_added),
+                data={"albums": albums_added, "artists": artists_added},
+            )
+        return albums_added
 
     async def sync_artist(self, artist_id: int, initial_monitor: str | None = None) -> None:
         """Récupère la discographie et marque comme recherchés les albums suivis non présents."""

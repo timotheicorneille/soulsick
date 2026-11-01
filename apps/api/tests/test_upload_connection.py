@@ -115,7 +115,7 @@ def test_alias_des_partages_stable_entre_redemarrages():
 
 def test_le_scan_des_partages_a_son_propre_pool(tmp_path):
     """Cas réel : au démarrage, la lecture des tags de 2 379 fichiers partagés (sshfs) occupait le
-    pool de threads par défaut ; la notation d'une chasse Qobuz restait bloquée derrière."""
+    pool de threads par défaut ; la notation d'une chasse restait bloquée derrière."""
     from soulsick.settings_store import SoulseekSettings
     from soulsick.slsk.engine import SlskEngine, _Client
 

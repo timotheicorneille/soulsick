@@ -3,6 +3,7 @@
 import asyncio
 import os
 
+import httpx
 import pytest
 from fakes import FakeEngine, FakeMB, peer_with_album
 from httpx import ASGITransport, AsyncClient
@@ -20,6 +21,10 @@ async def ctx(tmp_path):
     )
     engine = FakeEngine(str(env.downloads_dir))
     core = Core(env, mb=FakeMB(env.covers_dir), engine=engine)
+    # No network in tests: ListenBrainz, Deezer and LRCLIB know nothing unless a test says otherwise
+    offline = httpx.MockTransport(lambda request: httpx.Response(404))
+    core.discover.client = httpx.AsyncClient(transport=offline)
+    core.lyrics.client = httpx.AsyncClient(transport=offline)
     app = create_app(env, core)
     async with app.router.lifespan_context(app):
         transport = ASGITransport(app=app)

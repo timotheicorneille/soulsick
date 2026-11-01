@@ -8,9 +8,14 @@ again once a week; recommendations are computed from them, never from the networ
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
+import re
+import time
+import unicodedata
 from collections import defaultdict
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 import httpx
@@ -29,12 +34,27 @@ URL = "https://labs.api.listenbrainz.org/similar-artists/json"
 ALGORITHM = "session_based_days_7500_session_300_contribution_5_threshold_10_limit_100_filter_True_skip_30"
 KEEP = 30  # similar artists kept per followed artist
 REFRESH = timedelta(days=7)
+# Artist photos: MusicBrainz has none, Deezer has nearly every artist (no API key)
+DEEZER_SEARCH = "https://api.deezer.com/search/artist"
+NO_PHOTO_RETRY = 86400 * 7
+
+
+def _same_name(a: str, b: str) -> bool:
+    """Deezer is searched by name: accents, case and punctuation aside, the names must be equal."""
+    def norm(v: str) -> str:
+        v = unicodedata.normalize("NFKD", v.casefold())
+        return re.sub(r"[\W_]+", "", "".join(c for c in v if not unicodedata.combining(c)))
+    return norm(a) == norm(b)
 
 
 class DiscoverService:
     def __init__(self, core: Core) -> None:
         self.core = core
         self.client = httpx.AsyncClient(headers={"User-Agent": USER_AGENT}, timeout=30)
+        self._photos = asyncio.Semaphore(8)  # Deezer allows 50 requests every 5 s
+        self._prefetch: set[asyncio.Task] = set()
+        self._photo_locks: dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
+        self._wake = asyncio.Event()
 
     async def fetch(self, artist_id: int) -> bool:
         """Asks ListenBrainz for the similar artists of `artist_id`; False if it failed
@@ -67,7 +87,14 @@ class DiscoverService:
             if artist:
                 artist.similar_fetched_at = datetime.now(UTC)
             await s.commit()
+        # Their photos, before the page asks for them (a page is ~60 cards)
+        task = asyncio.create_task(self._prefetch_photos([x["artist_mbid"] for x in rows[:KEEP]]))
+        self._prefetch.add(task)
+        task.add_done_callback(self._prefetch.discard)
         return True
+
+    async def _prefetch_photos(self, mbids: list[str]) -> None:
+        await asyncio.gather(*(self.photo(m) for m in mbids), return_exceptions=True)
 
     async def refresh_stale(self, limit: int = 10) -> int:
         """Fetches the artists never asked, or asked more than a week ago; returns how many."""
@@ -91,16 +118,26 @@ class DiscoverService:
             ids = list((await s.execute(select(Artist.id))).scalars())
         return sum([await self.fetch(aid) for aid in ids])
 
+    def soon(self) -> None:
+        """An artist was just followed: its similar artists are asked now, not at the next pass."""
+        self._wake.set()
+
+    async def _pause(self, seconds: float) -> None:
+        with contextlib.suppress(TimeoutError):
+            await asyncio.wait_for(self._wake.wait(), seconds)
+        self._wake.clear()
+
     async def loop(self) -> None:
-        await asyncio.sleep(120)
+        await self._pause(120)
         while True:
             try:
-                await self.refresh_stale()
+                while await self.refresh_stale():  # 10 at a time: a bulk add can bring more
+                    pass
             except asyncio.CancelledError:
                 raise
             except Exception:
                 log.exception("discover")
-            await asyncio.sleep(1800)
+            await self._pause(1800)
 
     async def dismiss(self, mbid: str) -> None:
         async with self.core.db.session() as s:
@@ -165,3 +202,48 @@ class DiscoverService:
             }
             for x in rows
         ]
+
+    async def photo(self, mbid: str) -> Path | None:
+        """Photo of an artist (followed or recommended), from Deezer, kept on disk.
+
+        Deezer is searched by name: among the artists with exactly that name, the one with
+        the most fans (homonyms with a handful of fans are common). None if there is no photo.
+        """
+        async with self._photo_locks[mbid]:  # the page and the prefetch can ask at the same time
+            return await self._photo(mbid)
+
+    async def _photo(self, mbid: str) -> Path | None:
+        covers = self.core.mb.covers_dir
+        path, missing = covers / f"artist-{mbid}.jpg", covers / f"artist-{mbid}.missing"
+        if path.exists():
+            return path
+        if missing.exists() and time.time() - missing.stat().st_mtime < NO_PHOTO_RETRY:
+            return None
+        async with self.core.db.session() as s:
+            name = (await s.execute(select(Artist.name).where(Artist.mbid == mbid))).scalar() or (
+                await s.execute(select(SimilarArtist.name).where(SimilarArtist.mbid == mbid).limit(1))
+            ).scalar()
+        if not name:
+            return None
+        async with self._photos:
+            try:
+                r = await self.client.get(DEEZER_SEARCH, params={"q": name, "limit": 25})
+                r.raise_for_status()
+                found = [
+                    a for a in r.json().get("data", [])
+                    if _same_name(a.get("name", ""), name)
+                    and a.get("picture_big") and "/artist//" not in a["picture_big"]  # Deezer's placeholder
+                ]
+                if not found:
+                    missing.touch()
+                    return None
+                best = max(found, key=lambda a: a.get("nb_fan", 0))
+                img = await self.client.get(best["picture_big"])
+                img.raise_for_status()
+            except (httpx.HTTPError, ValueError) as e:
+                log.warning("artist photo %s: %s", name, e)
+                return None  # network trouble: asked again next time
+        covers.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(img.content)
+        missing.unlink(missing_ok=True)
+        return path

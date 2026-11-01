@@ -11,7 +11,8 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
-      '/api': { target: 'http://127.0.0.1:5030', changeOrigin: true, ws: true },
+      // Host kept as is: the API only accepts the live WebSocket when Origin matches Host
+      '/api': { target: 'http://127.0.0.1:5030', ws: true },
     },
   },
 })

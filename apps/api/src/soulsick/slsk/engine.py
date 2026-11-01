@@ -551,6 +551,14 @@ class SlskEngine:
         async with self._lifecycle:
             await self._halt()
 
+    async def hold(self, cfg: SoulseekSettings, reason: Msg) -> None:
+        """Stays off the network, saying why (behind the VPN, until it forwards a port)."""
+        async with self._lifecycle:
+            await self._halt()
+            self.config = cfg
+            self.error = reason
+            self._publish_status()
+
     async def _halt(self) -> None:
         self._stopping = True
         task, self._reconnect_task = self._reconnect_task, None

@@ -147,3 +147,79 @@ async def test_listenbrainz_injoignable_ne_casse_rien(ctx):  # noqa: F811
     body = (await client.get("/api/discover")).json()
     assert body["recommendations"] == []
     assert body["pending"] == 2, "les artistes seront redemandés au prochain passage"
+
+
+async def test_photo_d_artiste_depuis_deezer(ctx):  # noqa: F811
+    """Deezer est cherché par nom : l'homonyme le plus écouté, jamais l'image par défaut."""
+    import asyncio
+
+    client, core, engine, env = ctx
+    await _setup(client, core)
+    core.discover.client = listenbrainz([])
+    await client.post("/api/discover/refresh")
+    await asyncio.gather(*core.discover._prefetch)  # their photos: the fake ListenBrainz has none
+    for f in core.mb.covers_dir.glob("artist-*"):
+        f.unlink()
+    searches: list[str] = []
+
+    def deezer(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "img.test":
+            return httpx.Response(200, content=b"jpeg:" + request.url.path.encode())
+        searches.append(request.url.params["q"])
+        return httpx.Response(200, json={"data": {
+            "Damso": [
+                {"name": "Damso", "nb_fan": 597, "picture_big": "https://img.test/faux.jpg"},
+                {"name": "Damsø", "nb_fan": 9_000_000, "picture_big": "https://img.test/autre.jpg"},
+                {"name": "DAMSO", "nb_fan": 5_156_654, "picture_big": "https://img.test/vrai.jpg"},
+            ],
+            "Orelsan": [{"name": "Orelsan", "nb_fan": 10, "picture_big": "https://img.test/images/artist//500x500.jpg"}],
+        }.get(request.url.params["q"], [])})
+
+    core.discover.client = httpx.AsyncClient(transport=httpx.MockTransport(deezer))
+
+    r = await client.get(f"/api/artist-photos/{DAMSO}")
+    assert r.status_code == 200 and r.content == b"jpeg:/vrai.jpg"
+    assert (await client.get(f"/api/artist-photos/{DAMSO}")).content == b"jpeg:/vrai.jpg"
+    assert searches == ["Damso"], "la photo est gardée sur le disque"
+
+    assert (await client.get(f"/api/artist-photos/{ORELSAN}")).status_code == 404, "image par défaut de Deezer"
+    assert (await client.get(f"/api/artist-photos/{VALD}")).status_code == 404, "artiste suivi, absent de Deezer"
+    assert (await client.get(f"/api/artist-photos/{ORELSAN}")).status_code == 404
+    assert searches == ["Damso", "Orelsan", "Vald"], "l'absence de photo est retenue aussi"
+    assert (await client.get("/api/artist-photos/pas-un-mbid")).status_code == 400
+
+
+async def test_un_artiste_ajoute_est_demande_tout_de_suite(ctx):  # noqa: F811
+    """Sans attendre le prochain passage (30 min) : suivre un artiste réveille Découvrir."""
+    import asyncio
+
+    client, core, engine, env = ctx
+    await client.post("/api/auth/setup", json={"username": "admin", "password": "motdepasse"})
+    pause = asyncio.create_task(core.discover._pause(1800))
+    await asyncio.sleep(0)
+    await core.catalog.add_artist(DAMSO, mode="validation", quality_profile_id=None,
+                                  primary_types=["album"], secondary_types=[])
+    await asyncio.wait_for(pause, 1)
+
+
+async def test_les_photos_sont_prechargees_avec_les_similaires(ctx):  # noqa: F811
+    """La page ne les attend pas : elles arrivent avec les artistes similaires."""
+    import asyncio
+
+    client, core, engine, env = ctx
+    await _setup(client, core)
+    lb = listenbrainz([])
+
+    async def both(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "api.deezer.com":
+            q = request.url.params["q"]
+            return httpx.Response(200, json={"data": [{"name": q, "nb_fan": 1, "picture_big": f"https://img.test/{q}.jpg"}]})
+        if request.url.host == "img.test":
+            return httpx.Response(200, content=b"jpeg")
+        return await lb._transport.handle_async_request(request)
+
+    core.discover.client = httpx.AsyncClient(transport=httpx.MockTransport(both))
+    await client.post("/api/discover/refresh")
+    await asyncio.gather(*core.discover._prefetch)
+    for mbid in (DAMSO, ORELSAN, PNL):
+        assert (core.mb.covers_dir / f"artist-{mbid}.jpg").exists()

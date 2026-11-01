@@ -231,6 +231,17 @@ export interface LibraryFile {
   release_group_mbid: string | null
   release_mbid: string | null
   recording_mbid: string | null
+  lyrics: FileLyrics | null
+}
+
+/** The pass looking for the library's missing lyrics on LRCLIB */
+export interface LyricsJob { running: boolean, done: number, total: number, found: number }
+
+/** Lyrics Navidrome plays for a file: the file next to it first, else those embedded */
+export interface FileLyrics {
+  kind: 'synced' | 'plain'
+  source: 'file' | 'embedded'
+  ext: string | null
 }
 
 export type TransferStateName = 'queued' | 'initializing' | 'transferring' | 'paused' | 'complete' | 'failed' | 'aborted'
@@ -387,29 +398,15 @@ export interface AppSettings {
     stuck_no_progress_minutes: number
     stuck_queue_minutes: number
     stuck_after_attempts: number
-    source: DownloadSource
   }
   library: {
     naming_template: string
     sync_interval_hours: number
     write_tags: boolean
     embed_cover: boolean
+    fetch_lyrics: boolean
   }
   navidrome: { enabled: boolean, url: string, username: string, password: string }
-  qobuz: { token: string, quality: QobuzQuality, app_id: string, app_secret: string }
-}
-
-export type DownloadSource = 'soulseek' | 'qobuz' | 'qobuz_first'
-export type QobuzQuality = 27 | 7 | 6 | 5
-
-export interface QobuzTest {
-  ok: boolean
-  error?: string
-  error_t?: { key: string, params: Record<string, unknown> }
-  user?: string | null
-  subscription?: string | null
-  hires?: boolean
-  app_id?: string
 }
 
 export interface CoverageSource {
@@ -434,6 +431,19 @@ export interface CoverageTrack {
   /** Format of the shelved file; `upgrade` when it is below the rest of the album */
   library_format?: string | null
   upgrade?: boolean
+  /** Other peers having this track, to take it from them */
+  holders?: CoverageHolder[]
+}
+
+export interface CoverageHolder {
+  candidate_id: number
+  username: string
+  status: string
+  format: string | null
+  filename: string
+  has_free_slots: boolean
+  queue_size: number
+  avg_speed: number
 }
 
 export interface CoverageFiller {

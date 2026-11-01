@@ -4,14 +4,16 @@ from fakes import TRACKS, peer_with_album
 from test_flow import ctx, wait_for  # noqa: F401
 
 from soulsick.audiotags import read_meta
-from soulsick.models import LibraryFile
+from soulsick.models import Candidate, CandidateStatus, LibraryFile
 from sqlalchemy import select
 
 FILE2 = f"02 - {TRACKS[1][0]}.flac"
 
 
 async def _album_with_one_missing(client, core, engine):
-    """am3 donne 2 pistes sur 3 (la 2 est refusée jusqu'au bout), otherpeer a l'album complet."""
+    """am3 donne 2 pistes sur 3 (la 2 est refusée jusqu'au bout), otherpeer a l'album complet.
+    otherpeer (et flaky) ont été écartés à la notation : le relais automatique ne va pas chez
+    eux, compléter depuis eux reste ton choix."""
     await client.post("/api/auth/setup", json={"username": "admin", "password": "motdepasse"})
     r = await client.post("/api/artists", json={"mbid": "x", "mode": "validation", "primary_types": ["album"], "monitor": "all"})
     aid = r.json()["id"]
@@ -26,6 +28,10 @@ async def _album_with_one_missing(client, core, engine):
     cands = (await client.get(f"/api/albums/{rid}")).json()["candidates"]
     am3 = next(c for c in cands if c["username"] == "am3")
     other = next(c for c in cands if c["username"] == "otherpeer")
+    async with core.db.session() as s:
+        for c in (await s.execute(select(Candidate).where(Candidate.username != "am3"))).scalars():
+            c.status = CandidateStatus.REJECTED
+        await s.commit()
     await client.post(f"/api/candidates/{am3['id']}/approve")
 
     async def gave_up():

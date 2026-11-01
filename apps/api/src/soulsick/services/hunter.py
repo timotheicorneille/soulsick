@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING
 
 from sqlalchemy import func, or_, select
 
+from ..lyrics import DOWNLOADED_LYRICS
 from ..matching import TrackRef
 from ..messages import M, Msg, UserError, set_reason
 from ..models import (
@@ -28,11 +29,10 @@ from ..models import (
     Transfer,
     TransferState,
 )
-from ..quality import FORMAT_LABELS, is_better_or_equal
+from ..quality import FORMAT_LABELS, extension_of, is_better_or_equal
 from ..scoring import PeerResult, ReleaseOption, ScoredCandidate, rank_candidates, unique_tracklists
 from ..slsk.engine import EngineUnavailable
-from .qobuz import PREFIX as QOBUZ_PREFIX
-from .qobuz import QobuzError
+from .coverage import ACTIVE
 
 if TYPE_CHECKING:
     from ..core import Core
@@ -109,7 +109,7 @@ class HunterService:
             return
         self.last_run_at = now
         self.next_run_at = now + timedelta(minutes=cfg.interval_minutes)
-        if cfg.source == "soulseek" and not self.core.engine.logged_in:
+        if not self.core.engine.logged_in:
             return
         await self.run_wanted(cfg.max_searches_per_run)
 
@@ -163,23 +163,18 @@ class HunterService:
             await s.commit()
         self.core.hub.publish("album", {"id": rg_id, "status": status, "status_reason": reason.text if reason else None})
 
-    async def hunt(
-        self, rg_id: int, trigger: str = "manual", soulseek_only: bool = False,
-        source: str | None = None, replace: bool = False,
-    ) -> None:
-        """`source` forces where to search (else the setting); `replace`: you asked for this album
-        again — any valid version will do (not only a better format), and the best one starts
-        right away, whatever the artist's mode. The import then replaces the shelved files."""
+    async def hunt(self, rg_id: int, trigger: str = "manual", replace: bool = False) -> None:
+        """`replace`: you asked for this album again — any valid version will do (not only a
+        better format), and the best one starts right away, whatever the artist's mode. The
+        import then replaces the shelved files."""
         async with self._lock:
             try:
-                await self._hunt(rg_id, trigger, soulseek_only, source, replace)
+                await self._hunt(rg_id, trigger, replace)
             finally:
                 self.current = None
                 self.core.hub.publish("hunter", self.state())
 
-    async def _hunt(
-        self, rg_id: int, trigger: str, soulseek_only: bool = False, forced: str | None = None, replace: bool = False,
-    ) -> None:
+    async def _hunt(self, rg_id: int, trigger: str, replace: bool = False) -> None:
         loaded = await self._load(rg_id)
         if not loaded:
             return
@@ -214,52 +209,36 @@ class HunterService:
             data={"queries": queries, "profile": profile.name, "formats": profile.formats, "trigger": trigger},
         )
 
-        source = "soulseek" if soulseek_only else (forced or cfg.source)
         all_results: list[PeerResult] = []
         run_ids: list[int] = []
-        if source in ("qobuz", "qobuz_first"):
+        options = await self._options(rg, releases)
+        for q in queries:
+            self.current = {"release_group_id": rg_id, "label": label, "step": "search", "query": q}
+            self.core.hub.publish("hunter", self.state())
             try:
-                all_results.extend(await self._search_qobuz(rg_id, artist.id, label, queries[0], trigger, run_ids))
-            except QobuzError as e:
+                results = await self.core.engine.search(q, cfg.search_wait_seconds)
+            except EngineUnavailable as e:
+                await self._set_status(rg_id, AlbumStatus.WANTED, M("reason.soulseek_unavailable", error=e.msg))
                 await self.core.journal.emit(
-                    "hunt.qobuz_error", M("hunt.qobuz_error", label=label, error=e.msg),
+                    "hunt.skipped", M("hunt.skipped", label=label, error=e.msg),
                     level="warning", artist_id=artist.id, release_group_id=rg_id,
                 )
-                if source == "qobuz":
-                    await self._set_status(rg_id, AlbumStatus.WANTED, M("reason.qobuz_unavailable", error=e.msg))
-                    return
-
-        options = await self._options(rg, releases)
-        scored = await self._rank(all_results, options, rg, profile, cfg, artist.name, label, replace)
-        # Qobuz first: Soulseek is only searched when Qobuz has nothing usable
-        if source == "soulseek" or (source == "qobuz_first" and not any(not c.rejected for c in scored)):
-            for q in queries:
-                self.current = {"release_group_id": rg_id, "label": label, "step": "search", "query": q}
-                self.core.hub.publish("hunter", self.state())
-                try:
-                    results = await self.core.engine.search(q, cfg.search_wait_seconds)
-                except EngineUnavailable as e:
-                    await self._set_status(rg_id, AlbumStatus.WANTED, M("reason.soulseek_unavailable", error=e.msg))
-                    await self.core.journal.emit(
-                        "hunt.skipped", M("hunt.skipped", label=label, error=e.msg),
-                        level="warning", artist_id=artist.id, release_group_id=rg_id,
-                    )
-                    return
-                files = sum(len(r.files) for r in results)
-                async with self.core.db.session() as s:
-                    run = SearchRun(
-                        release_group_id=rg_id, query=q, kind=trigger, result_count=files, peer_count=len(results)
-                    )
-                    s.add(run)
-                    await s.commit()
-                    run_ids.append(run.id)
-                await self.core.journal.emit(
-                    "search.done",
-                    M("search.done", query=q, files=files, peers=len(results)),
-                    artist_id=artist.id, release_group_id=rg_id, data={"query": q, "files": files, "peers": len(results)},
+                return
+            files = sum(len(r.files) for r in results)
+            async with self.core.db.session() as s:
+                run = SearchRun(
+                    release_group_id=rg_id, query=q, kind=trigger, result_count=files, peer_count=len(results)
                 )
-                all_results.extend(results)
-            scored = await self._rank(all_results, options, rg, profile, cfg, artist.name, label, replace)
+                s.add(run)
+                await s.commit()
+                run_ids.append(run.id)
+            await self.core.journal.emit(
+                "search.done",
+                M("search.done", query=q, files=files, peers=len(results)),
+                artist_id=artist.id, release_group_id=rg_id, data={"query": q, "files": files, "peers": len(results)},
+            )
+            all_results.extend(results)
+        scored = await self._rank(all_results, options, rg, profile, cfg, artist.name, label, replace)
 
         valid = [c for c in scored if not c.rejected]
         keep = valid[:30] + [c for c in scored if c.rejected][:30]
@@ -342,24 +321,6 @@ class HunterService:
                 artist_id=artist.id, release_group_id=rg_id,
             )
 
-    async def _search_qobuz(
-        self, rg_id: int, artist_id: int, label: str, query: str, trigger: str, run_ids: list[int],
-    ) -> list[PeerResult]:
-        self.current = {"release_group_id": rg_id, "label": label, "step": "search", "query": f"Qobuz · {query}"}
-        self.core.hub.publish("hunter", self.state())
-        results = await self.core.qobuz.search(query)
-        files = sum(len(r.files) for r in results)
-        async with self.core.db.session() as s:
-            run = SearchRun(release_group_id=rg_id, query=f"Qobuz · {query}", kind=trigger, result_count=files, peer_count=len(results))
-            s.add(run)
-            await s.commit()
-            run_ids.append(run.id)
-        await self.core.journal.emit(
-            "search.done_qobuz", M("search.done_qobuz", query=query, n=len(results)),
-            artist_id=artist_id, release_group_id=rg_id, data={"query": query, "albums": len(results)},
-        )
-        return results
-
     async def _options(self, rg: ReleaseGroup, releases: list) -> list[ReleaseOption]:
         async with self.core.db.session() as s:
             # Tracks already shelved (e.g. by hand): a folder only needs to bring the others
@@ -441,7 +402,14 @@ class HunterService:
                         received[t.remote_path] = t
             c.status = CandidateStatus.CHOSEN
             c.download_dir = dest
-            files = [f for f in c.files if not f.get("extra") or cfg.download_covers]
+            # Lyrics always (small, and Navidrome reads them); covers and the rest only if asked.
+            # Lyrics are asked first: the album is imported as soon as its audio is there, and
+            # peers send in the order asked
+            is_lyrics = [extension_of(f["filename"]) in DOWNLOADED_LYRICS for f in c.files]
+            files = [
+                f for f, lyr in sorted(zip(c.files, is_lyrics, strict=True), key=lambda x: not x[1])
+                if lyr or not f.get("extra") or cfg.download_covers
+            ]
             transfers = []
             for f in files:
                 done = received.get(f["filename"])
@@ -493,7 +461,7 @@ class HunterService:
             return
         try:
             for p in paths:
-                await self.core.backend(p).download(username, p, dest)
+                await self.core.engine.download(username, p, dest)
         except EngineUnavailable as e:
             await self.core.journal.emit(
                 "download.error", M("download.error", label=label, error=e.msg), level="error",
@@ -505,7 +473,9 @@ class HunterService:
         """Re-evaluates a candidate when one of its transfers reaches a final state.
 
         - refused file: automatic retry (growing delays), on the same row;
-        - attempts exhausted: candidate dropped (possible fallback);
+        - attempts exhausted: what arrived stays, the refused tracks are asked to other peers
+          (nothing arrived at all: the album goes to the next candidate, as before);
+        - cancelled files don't fail the source: it is done with the rest;
         - candidate already dropped but every file arrived after all: import anyway.
         """
         async with self.core.db.session() as s:
@@ -517,12 +487,16 @@ class HunterService:
         audio = [t for t in ts if not _is_extra(t.remote_path)]
         if not audio or any(t.state not in TERMINAL for t in audio):
             return
-        failed = [t for t in audio if t.state != TransferState.COMPLETE]
+        # Cancelled files (by you, or a track taken from another peer) are not a failure of
+        # the source; only files the peer refused are
+        refused = [t for t in audio if t.state == TransferState.FAILED]
+        cancelled = [t for t in audio if t.state == TransferState.ABORTED]
 
-        if failed:
-            if status != CandidateStatus.CHOSEN:
-                return
-            retryable = [t for t in failed if t.state == TransferState.FAILED and (t.attempts or 1) < self.max_attempts]
+        if status == CandidateStatus.FAILED:
+            if refused or cancelled:
+                return  # dropped, with what it brought: the album rule takes it from there
+        elif refused:
+            retryable = [t for t in refused if (t.attempts or 1) < self.max_attempts]
             pending = [t for t in retryable if t.id not in self._retrying]
             if retryable:
                 if pending:
@@ -543,28 +517,27 @@ class HunterService:
                     )
                     asyncio.create_task(self._retry_later([t.id for t in pending], delay))
                 return
-            cancelled = [t for t in failed if t.state == TransferState.ABORTED]
-            refused = [t for t in failed if t.state != TransferState.ABORTED]
-            parts: list[Msg] = []
-            if refused:
-                reasons = Counter(t.error or t.state for t in refused)
-                parts.append(M(
-                    "reason.refused_after", n=len(refused), max=self.max_attempts,
-                    reasons=", ".join(f"{k} ×{v}" for k, v in reasons.items()),
-                ))
-            if cancelled:
-                parts.append(M("reason.cancelled_by_you", n=len(cancelled)))
-            # Every file already reached an end: what is queued now was retried since, it stays
-            await self._fail_candidate(
-                candidate_id, parts[0] if len(parts) == 1 else M("join", a=parts[0], b=parts[1]),
-                abandon_pending=False,
+            reasons = Counter(t.error or t.state for t in refused)
+            reason = M(
+                "reason.refused_after", n=len(refused), max=self.max_attempts,
+                reasons=", ".join(f"{k} ×{v}" for k, v in reasons.items()),
             )
+            if not any(t.state == TransferState.COMPLETE for t in audio):
+                # Nothing came from this peer: the album goes to the next one, as always
+                await self._fail_candidate(candidate_id, reason, abandon_pending=False)
+                return
+            # What arrived stays; the refused tracks are asked to other peers that have them
+            await self._mark_failed(candidate_id, reason)
+            relayed = await self._relay_refused(c.release_group_id, candidate_id)
+            if not relayed:
+                # Nobody else has them: the import says what is missing (« à compléter »)
+                asyncio.create_task(self.core.importer.import_candidate(candidate_id, automatic=True))
             return
 
         # Extra files still in flight are dropped
         for t in ts:
             if t.state not in TERMINAL:
-                await self.core.backend(t.remote_path).abort(t.username, t.remote_path, "download")
+                await self.core.engine.abort(t.username, t.remote_path, "download")
         async with self.core.db.session() as s:
             row = await s.get(Candidate, candidate_id)
             assert row
@@ -576,7 +549,91 @@ class HunterService:
             M("download.complete_late" if status == CandidateStatus.FAILED else "download.complete", peer=c.username, n=len(audio)),
             release_group_id=c.release_group_id, candidate_id=candidate_id,
         )
-        asyncio.create_task(self.core.importer.import_candidate(candidate_id))
+        asyncio.create_task(self.core.importer.import_candidate(candidate_id, automatic=True))
+
+    async def take_track(self, rg_id: int, track_id: int, candidate_id: int) -> None:
+        """« Prendre chez… »: this track of the album, from this peer, now. Where it is being
+        fetched (in progress, queued, paused) is cancelled first; nothing changes if the peer
+        doesn't have it. A track already received stays as it is."""
+        cover = await self.core.coverage.album(rg_id, offers=None)
+        track = next((t for t in cover["tracks"] if t["track_id"] == track_id), None)
+        if track is None:
+            raise UserError("error.no_tracks_for_peer")
+        if track["state"] in ("received", "in_library"):
+            raise UserError("error.track_already_received")
+        if not any(h["candidate_id"] == candidate_id for h in track["holders"]):
+            raise UserError("error.no_tracks_for_peer")
+        async with self.core.db.session() as s:
+            to = await s.get(Candidate, candidate_id)
+            assert to
+            reason = M("reason.taken_elsewhere", peer=to.username).text
+            fetching = [x["transfer_id"] for x in track["sources"] if x["state"] in ACTIVE]
+            rows = list((await s.execute(select(Transfer).where(Transfer.id.in_(fetching))))) if fetching else []
+            olds = set()
+            for (t,) in rows:
+                t.state, t.error, t.completed_at = TransferState.ABORTED, reason, datetime.now(UTC)
+                if t.candidate_id:
+                    olds.add(t.candidate_id)
+            await s.commit()
+            targets = [(t.id, t.username, t.remote_path) for (t,) in rows]
+        for tid, username, path in targets:
+            self.core.transfers.forget(tid)
+            await self.core.transfers.stop_on_engine(username, path)
+            self.core.hub.publish("transfer", {"id": tid, "state": TransferState.ABORTED, "speed": 0, "stuck": False})
+        await self.complete_from(candidate_id, [track_id])
+        # The previous sources may have nothing left in flight now: they are settled
+        for cid in olds:
+            asyncio.create_task(self.on_transfer_terminal(cid))
+
+    async def _mark_failed(self, candidate_id: int, reason: Msg) -> None:
+        """The source is done, with failures: it stays a source for what it brought."""
+        async with self.core.db.session() as s:
+            c = await s.get(Candidate, candidate_id)
+            if c:
+                c.status = CandidateStatus.FAILED
+                set_reason(c, "reject_reason", reason)
+                await s.commit()
+
+    async def _relay_refused(self, rg_id: int, from_id: int) -> list[int]:
+        """The album's missing tracks, asked to the other peers that have them: best first (same
+        format, then whole coverage, free slot, score), never a peer where that very file already
+        failed or was cancelled. Returns the tracks relayed."""
+        cover = await self.core.coverage.album(rg_id, offers=None)
+        want = {t["track_id"] for t in cover["tracks"] if t["state"] == "missing"}
+        if not want:
+            return []
+        async with self.core.db.session() as s:
+            src = await s.get(Candidate, from_id)
+            fmt = src.format if src else None
+            dead = {
+                (cid, path) for cid, path in await s.execute(
+                    select(Transfer.candidate_id, Transfer.remote_path).where(
+                        Transfer.release_group_id == rg_id,
+                        Transfer.state.in_([TransferState.FAILED, TransferState.ABORTED]),
+                    )
+                )
+            }
+        fillers = [f for f in cover["fillers"] if f["status"] != CandidateStatus.REJECTED]
+        fillers.sort(key=lambda f: f["format"] != fmt)  # stable: keeps coverage's order otherwise
+        relayed: list[int] = []
+        for f in fillers:
+            tids = [
+                x["track_id"] for x in f["tracks"]
+                if x["track_id"] in want and (f["candidate_id"], x["filename"]) not in dead
+            ]
+            if not tids:
+                continue
+            await self.complete_from(f["candidate_id"], tids)
+            await self.core.journal.emit(
+                "download.relayed",
+                M("download.relayed", n=len(tids), peer=f["username"]),
+                release_group_id=rg_id, candidate_id=f["candidate_id"],
+            )
+            want -= set(tids)
+            relayed += tids
+            if not want:
+                break
+        return relayed
 
     async def _retry_later(self, transfer_ids: list[int], delay: float) -> None:
         try:
@@ -623,6 +680,14 @@ class HunterService:
                 for t in (await s.execute(select(Transfer).where(Transfer.candidate_id == c.id))).scalars()
             }
             sizes = {f["filename"]: f.get("size") for f in c.files}
+            # A peer taken back (after a switch): its files cancelled back then, and not asked
+            # again (another peer brought them), are no longer its. Left attached, they would
+            # fail it once this round is done, and the album would never be shelved
+            asked = {x["filename"] for x in files}
+            for path, t in list(existing.items()):
+                if path not in asked and t.state in TERMINAL and t.state != TransferState.COMPLETE:
+                    t.candidate_id = None
+                    del existing[path]
             rows = []
             for x in files:
                 if x["filename"] in existing:
@@ -662,7 +727,7 @@ class HunterService:
                 t = await s.get(Transfer, tid)
                 assert t
                 path, dest_dir = t.remote_path, os.path.dirname(t.local_path or dest)
-            await self.core.backend(path).download(username, path, dest_dir)
+            await self.core.engine.download(username, path, dest_dir)
         for tid in again:
             await self.core.transfers.requeue(tid, reset_attempts=True)
         return len(files)
@@ -744,10 +809,10 @@ class HunterService:
             )
         return len(dropped["ids"])
 
-    async def redownload(self, rg_id: int, source: str) -> int:
-        """You want this album again from `source`: what is downloading is dropped, the source is
-        searched and its best version starts. The shelved files are replaced only once the new
-        version is imported: if the source doesn't have the album, nothing is deleted."""
+    async def redownload(self, rg_id: int) -> int:
+        """You want this album again: what is downloading is dropped, Soulseek is searched and its
+        best version starts. The shelved files are replaced only once the new version is
+        imported: if nobody has the album, nothing is deleted."""
         async with self.core.db.session() as s:
             rg = await s.get(ReleaseGroup, rg_id)
             if not rg:
@@ -758,14 +823,14 @@ class HunterService:
                 Candidate.release_group_id == rg_id, Candidate.status == CandidateStatus.CHOSEN,
             ))).scalars())
             label, artist_id = f"{artist.name} – {rg.title}", artist.id
-        name = "Qobuz" if source == "qobuz" else "Soulseek"
+        name = "Soulseek"
         for cid in active:
             await self._drop_source(cid, M("reason.redownload", source=name))
         await self.core.journal.emit(
             "album.redownload", M("album.redownload", label=label, source=name, n=len(active)),
-            artist_id=artist_id, release_group_id=rg_id, data={"source": source, "dropped": active},
+            artist_id=artist_id, release_group_id=rg_id, data={"dropped": active},
         )
-        asyncio.create_task(self.hunt(rg_id, "manual", source=source, replace=True))
+        asyncio.create_task(self.hunt(rg_id, "manual", replace=True))
         return len(active)
 
     async def _drop_source(self, candidate_id: int, reason: Msg) -> dict | None:
@@ -883,13 +948,12 @@ class HunterService:
             ).scalars().first()
             await s.commit()
             rg_id, label, mode = rg.id, f"{artist.name} – {rg.title}", artist.mode
-            from_qobuz = c.directory.startswith(QOBUZ_PREFIX)
             next_id = nxt.id if nxt else None
             next_label = f"{nxt.username} ({nxt.score}/100)" if nxt else None
 
         for tid, username, path in targets:
             if not abandon_pending:
-                await self.core.backend(path).abort(username, path, "download")
+                await self.core.engine.abort(username, path, "download")
                 continue
             self.core.transfers.forget(tid)
             # Tolerates an engine that is down: often why the source failed in the first place
@@ -910,13 +974,6 @@ class HunterService:
             await self.start_download(next_id, by="auto")
         elif try_next and next_id:
             await self._set_status(rg_id, AlbumStatus.PENDING_APPROVAL, M("reason.chosen_failed"))
-        elif try_next and from_qobuz and (await self.core.settings.get()).hunter.source == "qobuz_first":
-            # Qobuz first: what Qobuz couldn't deliver is looked for on Soulseek
-            await self._set_status(rg_id, AlbumStatus.WANTED, M("reason.qobuz_fallback"))
-            await self.core.journal.emit(
-                "hunt.qobuz_fallback", M("hunt.qobuz_fallback", label=label), release_group_id=rg_id,
-            )
-            asyncio.create_task(self.hunt(rg_id, "auto", soulseek_only=True))
         else:
             await self._set_status(rg_id, AlbumStatus.WANTED, M("reason.last_failed", reason=reason))
 

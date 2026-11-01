@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING
 
 from sqlalchemy import select
 
+from .. import lyrics
 from ..audiotags import read_meta
 from ..matching import FileRef, TrackRef, match_files
 from ..messages import M, UserError
@@ -358,7 +359,7 @@ class ExistingImportService:
             for old in shelved:
                 if old.recording_mbid == t.recording_mbid and os.path.realpath(old.path) != os.path.realpath(dest):
                     if os.path.exists(old.path):
-                        os.remove(old.path)
+                        lyrics.drop_replaced(old.path, dest)  # its lyrics stay, on the new file
                         replaced.append(old.path)
         manual = self.is_manual(d)
         if manual and moved:
@@ -398,6 +399,7 @@ class ExistingImportService:
 
         self.results.pop(d, None)
         await self.core.library.scan()
+        self.core.lyrics.after_import(rg_mbid)  # lyrics of the tracks that have none
         await self.core.journal.emit(
             "import.existing",
             M(

@@ -67,8 +67,6 @@ def _redact(s: AppSettings) -> dict:
     d = s.model_dump()
     d["soulseek"]["password"] = "••••••••" if s.soulseek.password else ""
     d["navidrome"]["password"] = "••••••••" if s.navidrome.password else ""
-    d["qobuz"]["token"] = "••••••••" if s.qobuz.token else ""
-    d["qobuz"]["app_secret"] = "••••••••" if s.qobuz.app_secret else ""
     return d
 
 
@@ -84,12 +82,8 @@ async def put_settings(body: AppSettings, core: Core = Depends(get_core)) -> dic
         body.soulseek.password = current.soulseek.password
     if body.navidrome.password == "••••••••":
         body.navidrome.password = current.navidrome.password
-    if body.qobuz.token == "••••••••":
-        body.qobuz.token = current.qobuz.token
-    if body.qobuz.app_secret == "••••••••":
-        body.qobuz.app_secret = current.qobuz.app_secret
     await core.settings.save(body)
-    changed = [k for k in ("soulseek", "hunter", "library", "navidrome", "qobuz") if getattr(body, k) != getattr(current, k)]
+    changed = [k for k in ("soulseek", "hunter", "library", "navidrome") if getattr(body, k) != getattr(current, k)]
     await core.journal.emit(
         "settings.updated",
         M("settings.updated", sections=", ".join(changed)) if changed else M("settings.unchanged"),
@@ -150,11 +144,6 @@ async def delete_picture(core: Core = Depends(get_core)) -> dict:
     core.engine.set_picture(None)
     await core.journal.emit("profile.picture_removed", M("profile.picture_removed"))
     return {"ok": True}
-
-
-@router.post("/settings/qobuz/test")
-async def test_qobuz(core: Core = Depends(get_core)) -> dict:
-    return await core.qobuz.test()
 
 
 @router.post("/settings/navidrome/test")
@@ -378,6 +367,17 @@ async def storage(refresh: bool = False, core: Core = Depends(get_core)) -> dict
 async def scan_library(core: Core = Depends(get_core)) -> dict:
     asyncio.create_task(core.library.scan())
     return {"ok": True}
+
+
+@router.get("/library/lyrics")
+async def lyrics_job(core: Core = Depends(get_core)) -> dict:
+    return core.lyrics.job
+
+
+@router.post("/library/lyrics")
+async def fetch_library_lyrics(core: Core = Depends(get_core)) -> dict:
+    """Lyrics from LRCLIB for every track without, in the background."""
+    return {"started": core.lyrics.start_library(), **core.lyrics.job}
 
 
 @router.post("/library/guard/check")

@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING
 
 from sqlalchemy import select
 
+from .. import lyrics
 from ..audiotags import TagSet, read_meta, write_tags
 from ..matching import Assignment, FileRef, MatchResult, TrackRef, match_files
 from ..messages import M, Msg, UserError, set_reason
@@ -110,6 +111,7 @@ async def place_track(
                 raise UserError("error.destination_taken", path=dest)
         os.makedirs(os.path.dirname(dest), exist_ok=True)
         await asyncio.to_thread(shutil.move, src, dest)
+        await asyncio.to_thread(lyrics.follow, src, dest)
     return dest
 
 
@@ -131,8 +133,10 @@ class ImportService:
         releases = await self.core.catalog.releases_with_tracks(rg.id)
         return c, rg, artist, profile, releases
 
-    async def import_candidate(self, candidate_id: int) -> None:
-        """A candidate's files arrived: try importing the album (all sources together)."""
+    async def import_candidate(self, candidate_id: int, automatic: bool = False) -> None:
+        """A candidate's files arrived: try importing the album (all sources together).
+        `automatic`: started by the engine, not by you; skipped if the album was just shelved
+        (the end of a source and the album rule can both fire for the same last file)."""
         if not await self.core.guard.check():
             # Library folder missing or not mounted: the album waits, imported once it is back
             ctx = await self._context(candidate_id)
@@ -140,6 +144,8 @@ class ImportService:
                 await self._status(ctx[1].id, AlbumStatus.NEEDS_REVIEW, M(HELD, problem=self.core.guard.problem))
             return
         async with self._lock:
+            if automatic and await self._just_imported(candidate_id):
+                return
             try:
                 await self._import(candidate_id)
             except Exception as e:
@@ -152,6 +158,38 @@ class ImportService:
                         "import.error", M("import.error", title=rg.title, error=str(e)), level="error",
                         release_group_id=rg.id, candidate_id=candidate_id,
                     )
+
+    async def _just_imported(self, candidate_id: int) -> bool:
+        async with self.core.db.session() as s:
+            c = await s.get(Candidate, candidate_id)
+            rg = await s.get(ReleaseGroup, c.release_group_id) if c else None
+            return bool(rg and rg.status == AlbumStatus.IMPORTED)
+
+    async def import_if_ready(self, rg_id: int) -> bool:
+        """The album rule: every track of the edition aimed at is received (from any peer, even a
+        dropped one) or already shelved, and nothing is in flight any more → it is imported,
+        whatever state its sources are in. True if the import was started."""
+        async with self.core.db.session() as s:
+            rg = await s.get(ReleaseGroup, rg_id)
+            if not rg or rg.status != AlbumStatus.DOWNLOADING:
+                return False
+            transfers = list((await s.execute(select(Transfer).where(Transfer.release_group_id == rg_id))).scalars())
+        if any(t.state not in _TERMINAL and is_audio(t.remote_path) for t in transfers):
+            return False
+        cov = await self.core.coverage.album(rg_id, offers=0)
+        states = [t["state"] for t in cov["tracks"]]
+        if not states or "received" not in states or any(x not in ("received", "in_library") for x in states):
+            return False
+        # Imported through the source that delivered last (the import gathers every source anyway)
+        last = max(
+            (t for t in transfers if t.candidate_id and t.state == TransferState.COMPLETE),
+            key=lambda t: (t.completed_at is not None, t.completed_at, t.id),
+            default=None,
+        )
+        if last is None:
+            return False
+        await self.import_candidate(last.candidate_id, automatic=True)
+        return True
 
     async def _status(self, rg_id: int, status: str, reason: Msg | None) -> None:
         async with self.core.db.session() as s:
@@ -460,14 +498,14 @@ class ImportService:
 
         # Older files of this album go only when the plan brings a new version of the same track;
         # tracks the plan doesn't cover (already shelved, e.g. by hand) stay
-        placed = {tracks[i["track_id"]].recording_mbid for i in used}
+        placed = {tracks[i["track_id"]].recording_mbid: m["to"] for i, m in zip(used, moved, strict=True)}
         removed_old = []
         kept = []
         for f in old:
             if f.path in new_paths or not os.path.exists(f.path):
                 continue
             if f.recording_mbid in placed:
-                os.remove(f.path)
+                lyrics.drop_replaced(f.path, placed[f.recording_mbid])  # its lyrics stay, on the new file
                 removed_old.append(f.path)
             else:
                 kept.append(f.path)
@@ -481,6 +519,7 @@ class ImportService:
 
         # Index files BEFORE announcing the album as shelved (otherwise: shelved with 0 files)
         await self.core.library.scan()
+        self.core.lyrics.after_import(rg.mbid)  # lyrics of the tracks that came without
 
         metas = [read_meta(p) for p in [*new_paths, *kept]]
         fmt = worst_format([m.format for m in metas], [])

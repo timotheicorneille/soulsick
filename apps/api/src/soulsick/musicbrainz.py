@@ -98,33 +98,33 @@ class MusicBrainz:
         }
 
     async def artist_release_groups(self, artist_mbid: str) -> list[dict]:
-        """Release groups ayant au moins une édition officielle (exclut bootlegs et promos).
+        """Release groups de l'artiste, sans ceux qui n'ont que des bootlegs ou des promos.
 
-        La navigation des release-groups ne filtre pas par statut : on passe donc par les
-        releases officielles de l'artiste, dont on extrait les release groups.
+        « website-default » applique le même filtre que le site MusicBrainz. Parcourir les
+        release groups plutôt que les releases demande 2 à 4 fois moins de pages (une seconde
+        chacune) : une sortie a souvent plusieurs éditions.
         """
         groups: dict[str, dict] = {}
         offset = 0
         while True:
             data = await self._get(
-                "release",
-                {"artist": artist_mbid, "status": "official", "inc": "release-groups", "limit": 100, "offset": offset},
+                "release-group",
+                {"artist": artist_mbid, "release-group-status": "website-default", "limit": 100, "offset": offset},
                 ttl=600,
             )
-            releases = data.get("releases", [])
-            for r in releases:
-                g = r.get("release-group") or {}
+            page = data.get("release-groups", [])
+            for g in page:
                 if not g.get("id") or g["id"] in groups:
                     continue
                 groups[g["id"]] = {
                     "mbid": g["id"],
-                    "title": g.get("title") or r.get("title", ""),
+                    "title": g.get("title", ""),
                     "primary_type": (g.get("primary-type") or "").lower() or None,
                     "secondary_types": [t.lower() for t in g.get("secondary-types", [])],
                     "first_release_date": g.get("first-release-date") or None,
                 }
-            offset += len(releases)
-            if not releases or offset >= data.get("release-count", 0):
+            offset += len(page)
+            if not page or offset >= data.get("release-group-count", 0):
                 break
         return sorted(groups.values(), key=lambda g: g["first_release_date"] or "9999")
 

@@ -51,3 +51,7 @@ export const api = {
 export function coverUrl(mbid: string | null | undefined, size: 250 | 500 | 1200 = 250, kind = 'release-group') {
   return mbid ? `/api/covers/${kind}/${mbid}?size=${size}` : undefined
 }
+
+export function artistPhotoUrl(mbid: string) {
+  return `/api/artist-photos/${mbid}`
+}

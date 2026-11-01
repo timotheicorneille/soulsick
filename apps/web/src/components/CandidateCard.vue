@@ -12,7 +12,6 @@ import { cn } from '@/lib/utils'
 import FormatTag from './FormatTag.vue'
 import ScoreBreakdown from './ScoreBreakdown.vue'
 import SwitchPeerMenu from './SwitchPeerMenu.vue'
-import { isQobuz } from '@/lib/qobuz'
 import { serverText } from '@/lib/serverText'
 
 const props = defineProps<{
@@ -53,9 +52,7 @@ const statusBadge = computed(() => {
       <div class="flex min-w-0 flex-col gap-1.5">
         <div class="flex min-w-0 items-center gap-2">
           <span v-if="rank != null" class="font-mono text-[11px] text-faint tnum">#{{ rank }}</span>
-          <span v-if="isQobuz(c.directory)" class="truncate text-[13px] font-semibold tracking-tight text-foreground">Qobuz</span>
           <RouterLink
-            v-else
             :to="{ name: 'peer', params: { username: c.username } }"
             class="truncate font-mono text-[13px] font-medium text-foreground hover:text-primary"
           >

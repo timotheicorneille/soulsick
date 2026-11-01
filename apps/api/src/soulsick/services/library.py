@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import asyncio
 import os
+from collections import defaultdict
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 from sqlalchemy import delete, select
 
 from ..audiotags import read_meta
+from ..lyrics import LYRICS_EXTENSIONS, best_sidecar
 from ..messages import M, set_reason
 from ..models import AlbumStatus, Artist, LibraryFile, QualityProfile, Release, ReleaseGroup, of_artist
 from ..quality import is_audio, is_better_or_equal, worst_format
@@ -31,6 +33,7 @@ class LibraryService:
         self.core = core
         self._lock = asyncio.Lock()
         self.scanning = False
+        self._tasks: set[asyncio.Task] = set()
 
     async def scan(self, confirm_empty: bool = False) -> dict:
         """`confirm_empty`: the person confirmed the library folder really is empty now
@@ -60,12 +63,17 @@ class LibraryService:
     async def _scan(self) -> dict:
         root = str(self.core.env.music_dir)
         on_disk: dict[str, tuple[int, float]] = {}
+        # Lyrics files next to the tracks, by folder and name: (dir, stem) -> extensions
+        sidecars: dict[tuple[str, str], set[str]] = defaultdict(set)
 
         def walk() -> None:
             for dirpath, dirnames, filenames in os.walk(root):
                 dirnames[:] = [d for d in dirnames if not d.startswith(".")]
                 for fn in filenames:
-                    if is_audio(fn):
+                    stem, ext = os.path.splitext(fn)
+                    if ext[1:].lower() in LYRICS_EXTENSIONS:
+                        sidecars[(dirpath, stem)].add(ext[1:].lower())
+                    elif is_audio(fn):
                         p = os.path.join(dirpath, fn)
                         try:
                             st = os.stat(p)
@@ -80,7 +88,11 @@ class LibraryService:
             removed = [p for p in known if p not in on_disk]
             if removed:
                 await s.execute(delete(LibraryFile).where(LibraryFile.path.in_(removed)))
-            changed = [p for p, (_, mt) in on_disk.items() if p not in known or known[p].mtime != mt]
+            # Files from before lyrics were tracked (lyrics_embedded unknown) are read once more
+            changed = [
+                p for p, (_, mt) in on_disk.items()
+                if p not in known or known[p].mtime != mt or known[p].lyrics_embedded is None
+            ]
             for p in changed:
                 meta = await asyncio.to_thread(read_meta, p)
                 row = known.get(p) or LibraryFile(path=p)
@@ -94,11 +106,23 @@ class LibraryService:
                 row.release_group_mbid = meta.release_group_mbid
                 row.release_mbid = meta.release_mbid
                 row.recording_mbid = meta.recording_mbid
+                row.lyrics_embedded = meta.lyrics or ""  # "": read, none
                 row.scanned_at = datetime.now(UTC)
                 s.add(row)
+                known[p] = row
+            # Checked on every scan: a .lrc added or removed doesn't touch its track
+            for p in on_disk:
+                stem = os.path.splitext(os.path.basename(p))[0]
+                sidecar = best_sidecar(sidecars.get((os.path.dirname(p), stem), set()))
+                if known[p].lyrics_file != sidecar:
+                    known[p].lyrics_file = sidecar
             await s.commit()
 
         await self.refresh_all()
+        # Albums tagged with MusicBrainz but unknown to the catalog: added (not followed), in the background
+        task = asyncio.create_task(self.core.catalog.from_library())
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
         stats = {"files": len(on_disk), "new_or_changed": len(changed), "removed": len(removed)}
         await self.core.journal.emit(
             "library.scanned",

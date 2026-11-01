@@ -1,24 +1,28 @@
 <script setup lang="ts">
-import type { ReleaseGroup } from '@/lib/types'
+import type { LyricsJob, ReleaseGroup } from '@/lib/types'
 import { isPartial } from '@/lib/types'
-import { LibraryIcon, SearchIcon } from '@lucide/vue'
-import { useQuery } from '@tanstack/vue-query'
+import { LibraryIcon, MicVocalIcon, SearchIcon } from '@lucide/vue'
+import { useMutation, useQuery } from '@tanstack/vue-query'
 import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
+import { toast } from 'vue-sonner'
 import CoverArt from '@/components/CoverArt.vue'
 import FormatTag from '@/components/FormatTag.vue'
 import ImportPanel from '@/components/ImportPanel.vue'
 import ManualFolder, { type ManualFolderInfo } from '@/components/ManualFolder.vue'
 import PageHeader from '@/components/PageHeader.vue'
+import { Button } from '@/components/ui/button'
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@/components/ui/empty'
 import { InputGroup, InputGroupAddon, InputGroupInput } from '@/components/ui/input-group'
 import { Skeleton } from '@/components/ui/skeleton'
+import { Spinner } from '@/components/ui/spinner'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { useStatus, useStorage } from '@/composables/queries'
 import { api } from '@/lib/api'
 import { ago, bytes, year } from '@/lib/format'
 import { cn } from '@/lib/utils'
+import { useLive } from '@/stores/live'
 
 type LibraryAlbum = ReleaseGroup & { sources: string[], file_count: number }
 
@@ -30,6 +34,16 @@ const { data: storage } = useStorage()
 const musicDisk = computed(() => storage.value?.disks.find(d => d.folders.some(f => f.key === 'music')))
 const { data: albums, isPending } = useQuery({ queryKey: ['albums', 'library'], queryFn: () => api.get<LibraryAlbum[]>('/library/albums') })
 const { data: manual } = useQuery({ queryKey: ['transfers', 'manual'], queryFn: () => api.get<ManualFolderInfo[]>('/library/manual') })
+
+// Missing lyrics from LRCLIB: the pass runs in the background, its progress comes live
+const live = useLive()
+const { data: lyricsInitial } = useQuery({ queryKey: ['lyrics-job'], queryFn: () => api.get<LyricsJob>('/library/lyrics') })
+const lyricsJob = computed(() => live.lyricsJob ?? lyricsInitial.value)
+const fetchLyrics = useMutation({
+  mutationFn: () => api.post<LyricsJob & { started: boolean }>('/library/lyrics'),
+  onSuccess: r => r.started && toast.success(t('library.fetchLyricsStarted'), { description: t('library.fetchLyricsHint') }),
+  onError: e => toast.error(t('lyrics.unavailable'), { description: e.message }),
+})
 
 const TABS = ['albums', 'manual', 'import']
 const tab = ref(TABS.includes(route.query.tab as string) ? route.query.tab as string : 'albums')
@@ -55,6 +69,17 @@ const shown = computed(() => {
           >· {{ t('storage.freeShort', { free: bytes(musicDisk.free) }) }}</RouterLink>
         </span>
       </template>
+      <Button
+        size="sm"
+        variant="outline"
+        :title="t('library.fetchLyricsHint')"
+        :disabled="lyricsJob?.running || fetchLyrics.isPending.value"
+        @click="fetchLyrics.mutate()"
+      >
+        <Spinner v-if="lyricsJob?.running || fetchLyrics.isPending.value" data-icon="inline-start" />
+        <MicVocalIcon v-else data-icon="inline-start" />
+        {{ lyricsJob?.running && lyricsJob.total ? t('library.fetchLyricsRunning', { done: lyricsJob.done, total: lyricsJob.total }) : t('library.fetchLyrics') }}
+      </Button>
     </PageHeader>
 
     <Tabs v-model="tab" class="gap-5">

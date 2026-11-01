@@ -33,7 +33,7 @@ Les données vont dans `./data/` comme en dev. Les chemins se changent avec les 
 }
 ```
 
-L'interface écoute sur le port 5030. Le compte Soulseek, le port d'écoute Soulseek, Navidrome et Qobuz se règlent dans l'interface, comme avec Docker. Si tu changes le port d'écoute, aligne `services.soulsick.soulseekPorts` (le port, puis le port + 1).
+L'interface écoute sur le port 5030. Le compte Soulseek, le port d'écoute Soulseek et Navidrome se règlent dans l'interface, comme avec Docker. Si tu changes le port d'écoute, aligne `services.soulsick.soulseekPorts` (le port, puis le port + 1).
 
 Le service tourne sous un utilisateur `soulsick` sans privilèges. Pour que Navidrome lise la bibliothèque, mets les deux dans un groupe commun (`users.users.soulsick.extraGroups`).
 

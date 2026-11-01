@@ -1,7 +1,7 @@
 # services.soulsick : Soulsick en service systemd, sans conteneur.
 #
 # Seuls les chemins et l'adresse d'écoute web se déclarent ici. Le reste (compte
-# Soulseek, port d'écoute Soulseek, Navidrome, Qobuz...) se règle dans l'interface
+# Soulseek, port d'écoute Soulseek, Navidrome...) se règle dans l'interface
 # et vit dans la base SQLite de stateDir.
 { config, lib, ... }:
 let

@@ -30,6 +30,7 @@ from aioslsk.commands import (
     RoomMessageCommand,
 )
 from aioslsk.events import (
+    MessageReceivedEvent,
     PrivateMessageEvent,
     RoomJoinedEvent,
     RoomLeftEvent,
@@ -42,9 +43,10 @@ from aioslsk.events import (
 )
 from aioslsk.constants import TRANSFER_REPLY_TIMEOUT
 from aioslsk.exceptions import AuthenticationError, ConnectionReadError, ConnectionWriteError, PeerConnectionError
-from aioslsk.network.connection import CloseReason, PeerConnectionType
+from aioslsk.network.connection import CloseReason, DataConnection, PeerConnectionType
+from aioslsk.network.network import Network
 from aioslsk.protocol.messages import PeerTransferQueue, PeerTransferReply, PeerTransferRequest, SendUploadSpeed
-from aioslsk.protocol.primitives import AttributeKey, FileData, uint32
+from aioslsk.protocol.primitives import AttributeKey, FileData, MessageDataclass, uint32
 from aioslsk.search.model import SearchResult
 from aioslsk.settings import (
     CredentialsSettings,
@@ -192,6 +194,38 @@ class FilteringSharesManager(SharesManager):
             self._cleanup_term_map()
 
 
+class SafeNetwork(Network):
+    """aioslsk's network, so that a request always ends.
+
+    A message is handed to every future waiting for it. When one of them was already done
+    (a direct connection cancelled because the indirect one won, its cleanup not run yet),
+    aioslsk raised `InvalidStateError` on it and stopped there: the futures after it never
+    got the message (the `GetPeerAddress … invalid state` lines of the log). And the server's
+    answer with a peer's address is awaited without a timeout. So a connection to a peer that
+    doesn't call back (indirect attempt failed) waited forever for an address already lost,
+    and with it every file asked from that peer (see SafeTransferManager._queue_remotely).
+    """
+
+    # The server answers in well under a second (0.2 to 0.6 s measured)
+    PEER_ADDRESS_TIMEOUT = 30.0
+
+    async def on_message_received(self, message: MessageDataclass, connection: DataConnection):
+        """aioslsk's dispatch, except that a future already done is skipped."""
+        if message.__class__ in self._MESSAGE_MAP:
+            await self._MESSAGE_MAP[message.__class__](message, connection)
+        await self._event_bus.emit(MessageReceivedEvent(message, connection))
+        for expected_response in list(self._expected_response_futures):
+            if not expected_response.done() and expected_response.matches(connection, message):
+                expected_response.set_result((connection, message))
+
+    async def _get_peer_address(self, username: str) -> tuple[str, int, int]:
+        try:
+            async with asyncio.timeout(self.PEER_ADDRESS_TIMEOUT):
+                return await super()._get_peer_address(username)
+        except TimeoutError as e:
+            raise PeerConnectionError(f"no address from the server for user : {username}") from e
+
+
 class SafeTransferManager(TransferManager):
     """aioslsk's transfer manager, with one fix.
 
@@ -222,6 +256,11 @@ class SafeTransferManager(TransferManager):
     # each waiting for the same connection timeout
     PEER_FAILURE_COOLDOWN = 30.0
 
+    # A queue request holds its peer's lock: if it never ended, no other file would ever be
+    # asked from that peer. Longer than a slow but real one (server address, then the indirect
+    # connection, 60 s in aioslsk).
+    QUEUE_REQUEST_TIMEOUT = 90.0
+
     def _peer_lock(self, username: str) -> asyncio.Lock:
         locks = self.__dict__.setdefault("_peer_locks", {})
         return locks.setdefault(username, asyncio.Lock())
@@ -237,7 +276,13 @@ class SafeTransferManager(TransferManager):
             try:
                 if recent:
                     raise PeerConnectionError("peer unreachable a moment ago")
-                await self._network.send_peer_messages(transfer.username, PeerTransferQueue.Request(transfer.remote_path))
+                try:
+                    async with asyncio.timeout(self.QUEUE_REQUEST_TIMEOUT):
+                        await self._network.send_peer_messages(
+                            transfer.username, PeerTransferQueue.Request(transfer.remote_path)
+                        )
+                except TimeoutError as e:
+                    raise PeerConnectionError("queue request without an answer") from e
             except (ConnectionWriteError, PeerConnectionError) as exc:
                 if not recent:
                     failures[transfer.username] = time.monotonic()
@@ -375,6 +420,9 @@ class _Client(SoulSeekClient):
             self.settings, self.events, self.network, cache=cache,
             executor_factory=executor_factory or _shares_executor,
         )
+
+    def create_network(self):
+        return SafeNetwork(self.settings, self.events)
 
     def create_transfer_manager(self, cache):
         return SafeTransferManager(self.settings, self.events, self.users, self.shares, self.network, cache=cache)

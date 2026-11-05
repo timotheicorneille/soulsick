@@ -349,6 +349,7 @@ class TransferService:
             t.place_in_queue = None
             t.error = None
             t.completed_at = None
+            t.requested_at = datetime.now(UTC)
             await s.commit()
             data = transfer_to_dict(t) | self._unwatch(tid)
         self.register("download", t.username, t.remote_path, t.id)
@@ -386,6 +387,7 @@ class TransferService:
             if not t or t.state != TransferState.PAUSED:
                 return False
             t.state = TransferState.QUEUED
+            t.requested_at = datetime.now(UTC)
             await s.commit()
             data = transfer_to_dict(t)
             username, path, local = t.username, t.remote_path, t.local_path

@@ -995,10 +995,10 @@ class HunterService:
                 if any(t.remotely_queued and t.state not in TERMINAL for t in ts):
                     continue  # the peer accepted: we are waiting in its upload queue, not stalled
                 started = any(t.started_at is not None or t.bytes_transferred > 0 for t in ts)
-                created = min(t.created_at for t in ts)
-                if created.tzinfo is None:
-                    created = created.replace(tzinfo=UTC)
-                if not started and created < limit:
+                # From the last time a file was asked: a source taken back (approved again,
+                # resumed after a pause) gets its STALL_MINUTES from that moment
+                asked = max(_aware(t.requested_at or t.created_at) for t in ts)
+                if not started and asked < limit:
                     stalled.append(c.id)
         for cid in stalled:
             await self._fail_candidate(cid, M("reason.stalled", minutes=STALL_MINUTES))
@@ -1014,6 +1014,11 @@ class HunterService:
             "last_run_at": self.last_run_at.isoformat() if self.last_run_at else None,
             "next_run_at": self.next_run_at.isoformat() if self.next_run_at else None,
         }
+
+
+def _aware(dt: datetime) -> datetime:
+    """SQLite gives the dates back without their time zone: they are UTC."""
+    return dt if dt.tzinfo else dt.replace(tzinfo=UTC)
 
 
 def _human_delay(seconds: float) -> str:

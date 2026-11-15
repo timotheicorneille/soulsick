@@ -42,6 +42,13 @@ log = logging.getLogger(__name__)
 TERMINAL = {TransferState.COMPLETE, TransferState.FAILED, TransferState.ABORTED}
 STALL_MINUTES = 30
 RETRY_HOURS = 12
+# What a peer answers when asking again is pointless: the file is not in its shares (any more),
+# or it does not want us. The other refusals (a read error, a full queue) can pass.
+FINAL_REFUSALS = ("file not shared", "banned", "blocked country", "disallowed extension", "pending shutdown")
+
+
+def is_final_refusal(error: str | None) -> bool:
+    return (error or "").strip().rstrip(".").lower() in FINAL_REFUSALS
 
 
 def clean_query(text: str) -> str:
@@ -475,7 +482,9 @@ class HunterService:
     async def on_transfer_terminal(self, candidate_id: int) -> None:
         """Re-evaluates a candidate when one of its transfers reaches a final state.
 
-        - refused file: automatic retry (growing delays), on the same row;
+        - refused file: automatic retry (growing delays), on the same row, without waiting for
+          the files the source is still sending; not when the refusal is final ("File not
+          shared."): asking again would get the same answer;
         - attempts exhausted: what arrived stays, the refused tracks are asked to other peers
           (nothing arrived at all: the album goes to the next candidate, as before);
         - cancelled files don't fail the source: it is done with the rest;
@@ -488,18 +497,21 @@ class HunterService:
             status = c.status
             ts = list((await s.execute(select(Transfer).where(Transfer.candidate_id == candidate_id))).scalars())
         audio = [t for t in ts if not _is_extra(t.remote_path)]
-        if not audio or any(t.state not in TERMINAL for t in audio):
+        if not audio:
             return
+        in_flight = any(t.state not in TERMINAL for t in audio)
         # Cancelled files (by you, or a track taken from another peer) are not a failure of
         # the source; only files the peer refused are
         refused = [t for t in audio if t.state == TransferState.FAILED]
         cancelled = [t for t in audio if t.state == TransferState.ABORTED]
 
         if status == CandidateStatus.FAILED:
-            if refused or cancelled:
+            if in_flight or refused or cancelled:
                 return  # dropped, with what it brought: the album rule takes it from there
         elif refused:
-            retryable = [t for t in refused if (t.attempts or 1) < self.max_attempts]
+            retryable = [
+                t for t in refused if (t.attempts or 1) < self.max_attempts and not is_final_refusal(t.error)
+            ]
             pending = [t for t in retryable if t.id not in self._retrying]
             if retryable:
                 if pending:
@@ -520,10 +532,13 @@ class HunterService:
                     )
                     asyncio.create_task(self._retry_later([t.id for t in pending], delay))
                 return
-            reasons = Counter(t.error or t.state for t in refused)
-            reason = M(
-                "reason.refused_after", n=len(refused), max=self.max_attempts,
-                reasons=", ".join(f"{k} ×{v}" for k, v in reasons.items()),
+            if in_flight:
+                return  # refused for good, the rest still coming: judged when the source is done
+            reasons = ", ".join(f"{k} ×{v}" for k, v in Counter(t.error or t.state for t in refused).items())
+            tried = max(t.attempts or 1 for t in refused)
+            reason = (
+                M("reason.refused_after", n=len(refused), max=tried, reasons=reasons) if tried > 1
+                else M("reason.refused", n=len(refused), reasons=reasons)
             )
             if not any(t.state == TransferState.COMPLETE for t in audio):
                 # Nothing came from this peer: the album goes to the next one, as always
@@ -535,6 +550,8 @@ class HunterService:
             if not relayed:
                 # Nobody else has them: the import says what is missing (« à compléter »)
                 asyncio.create_task(self.core.importer.import_candidate(candidate_id, automatic=True))
+            return
+        elif in_flight:
             return
 
         # Extra files still in flight are dropped

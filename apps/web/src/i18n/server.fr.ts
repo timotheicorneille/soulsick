@@ -27,6 +27,7 @@ const serverFr: Record<string, string> = {
   'reason.resume_from': 'Reprise depuis {peer}',
   'reason.chosen_failed': 'Le candidat choisi a échoué, choisis-en un autre',
   'reason.last_failed': 'Dernier essai échoué : {reason}',
+  'reason.refused': '{n} fichier refusé : {reasons} | {n} fichiers refusés : {reasons}',
   'reason.refused_after': '{n} fichier refusé après {max} essais : {reasons} | {n} fichiers refusés après {max} essais : {reasons}',
   'reason.cancelled_by_you': '{n} fichier annulé par toi | {n} fichiers annulés par toi',
   'reason.stalled': 'aucun transfert n’a démarré en {minutes} minutes (pair absent ou file pleine)',

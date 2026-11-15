@@ -80,7 +80,8 @@ class FakeEngine(SlskEngine):
         self.logged_in = True
         self.downloads: list[tuple[str, str, str]] = []
         self.results: list[PeerResult] = []
-        # Scénario par fichier : issue de chaque tentative successive ("complete" | "fail" | "hold")
+        # Scénario par fichier : issue de chaque tentative successive ("complete" | "fail" | "hold").
+        # "fail:File not shared." : refusé avec ce motif
         self.script: dict[str, list[str]] = {}
         self.paused: list[str] = []
         self.sent: list[tuple[str, str, str]] = []
@@ -144,9 +145,10 @@ class FakeEngine(SlskEngine):
         async def finish():
             await asyncio.sleep(0.01)
             await self.emit(username, remote_path, local, TransferState.QUEUED)
-            if outcome == "fail":
+            if outcome.startswith("fail"):
                 await asyncio.sleep(0.01)
-                await self.emit(username, remote_path, local, TransferState.FAILED, "Enqueue failed due to internal error")
+                why = outcome.partition(":")[2] or "Enqueue failed due to internal error"
+                await self.emit(username, remote_path, local, TransferState.FAILED, why)
                 return
             for state in (TransferState.TRANSFERRING, TransferState.COMPLETE):
                 await asyncio.sleep(0.01)

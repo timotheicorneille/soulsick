@@ -39,6 +39,7 @@ EN: dict[str, str] = {
     "reason.resume_from": "Resuming from {peer}",
     "reason.chosen_failed": "The chosen candidate failed, pick another one",
     "reason.last_failed": "Last attempt failed: {reason}",
+    "reason.refused": "{n} file refused: {reasons} | {n} files refused: {reasons}",
     "reason.refused_after": "{n} file refused after {max} attempts: {reasons} | {n} files refused after {max} attempts: {reasons}",
     "reason.cancelled_by_you": "{n} file cancelled by you | {n} files cancelled by you",
     "reason.stalled": "no transfer started within {minutes} minutes (peer away or queue full)",

@@ -816,6 +816,8 @@ const fr: Messages = {
       stuckQueue: 'File du pair figée (min)',
       stuckAttempts: 'À partir de l’essai',
       stuckAttemptsHint: '0 = jamais pour les essais répétés.',
+      silentSource: 'Remplacer une source muette après (min)',
+      silentSourceHint: 'Une source restée muette pendant ce temps (aucun fichier, aucune donnée, aucune avancée dans sa file) est remplacée par un autre pair qui a les pistes manquantes. Ce qui est arrivé est gardé. 0 = jamais.',
     },
     library: {
       template: 'Modèle de rangement',

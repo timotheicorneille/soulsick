@@ -191,6 +191,18 @@ class TransferService:
         reason = w["reason"] if w else None
         return {"stuck": reason is not None, "stuck_reason": reason, "stuck_since": iso_utc(w["since"]) if reason else None}
 
+    def last_motion(self, tids: list[int]) -> datetime | None:
+        """When these downloads last moved: a byte received, a step forward in the peer's queue.
+        None when one of them is not watched yet (just asked, or not seen since start-up): its
+        clock has not started."""
+        times = []
+        for tid in tids:
+            w = self._watch.get(tid)
+            if w is None:
+                return None
+            times.append(max(w["progress_at"], w["queue_since"] or w["progress_at"]))
+        return max(times, default=None)
+
     def stuck_count(self) -> int:
         return sum(1 for w in self._watch.values() if w["reason"])
 

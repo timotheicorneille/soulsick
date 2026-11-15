@@ -179,10 +179,11 @@ class CoverageService:
             "upgraders": upgraders[:offers],
         }
 
-    async def alternatives(self, candidate_id: int) -> dict:
+    async def alternatives(self, candidate_id: int, limit: int | None = 8) -> dict:
         """Other peers that have tracks this source has not delivered yet (to switch peer).
 
         A track counts when it is neither received nor shelved, and no OTHER source is fetching it.
+        `limit`: how many are returned, best first (None: all of them).
         """
         async with self.core.db.session() as s:
             current = await s.get(Candidate, candidate_id)
@@ -219,5 +220,5 @@ class CoverageService:
                 })
         # Whole album first, then a free slot, then the best score
         alts.sort(key=lambda a: (-a["tracks"], not a["has_free_slots"], -a["score"]))
-        out["alternatives"] = alts[:8]
+        out["alternatives"] = alts[:limit]
         return out

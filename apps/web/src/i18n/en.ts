@@ -817,6 +817,8 @@ const en = {
       stuckQueue: 'Peer’s queue frozen (min)',
       stuckAttempts: 'From attempt',
       stuckAttemptsHint: '0 = never for repeated attempts.',
+      silentSource: 'Replace a silent source after (min)',
+      silentSourceHint: 'A source that sent nothing for this long (no file, no data, no step forward in its queue) is replaced by another peer that has the missing tracks. What arrived is kept. 0 = never.',
     },
     library: {
       template: 'Naming template',

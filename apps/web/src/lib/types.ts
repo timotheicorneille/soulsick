@@ -398,6 +398,7 @@ export interface AppSettings {
     stuck_no_progress_minutes: number
     stuck_queue_minutes: number
     stuck_after_attempts: number
+    silent_source_minutes: number
   }
   library: {
     naming_template: string

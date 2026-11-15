@@ -83,6 +83,8 @@ class HunterService:
         self.current: dict | None = None
         self.last_run_at: datetime | None = None
         self.next_run_at: datetime | None = None
+        # Last time Soulseek was seen offline: no source is silent from before that
+        self._silent_floor = datetime.min.replace(tzinfo=UTC)
 
     # --- Loop -------------------------------------------------------------
 
@@ -97,8 +99,9 @@ class HunterService:
             await asyncio.sleep(60)
 
     async def tick(self) -> None:
-        await self.check_stalled()
         await self.core.transfers.check_stuck()
+        await self.check_silent()
+        await self.check_stalled()
         cfg = (await self.core.settings.get()).hunter
         now = datetime.now(UTC)
         if not cfg.enabled:
@@ -837,9 +840,10 @@ class HunterService:
         asyncio.create_task(self.hunt(rg_id, "manual", replace=True))
         return len(active)
 
-    async def _drop_source(self, candidate_id: int, reason: Msg) -> dict | None:
+    async def _drop_source(self, candidate_id: int, reason: Msg, error: Msg | None = None) -> dict | None:
         """Cancels the unfinished files of a source (what arrived is kept) and marks it failed.
-        The album status is left to the caller."""
+        The album status is left to the caller. `error`: what its cancelled files say (by
+        default, that you cancelled them)."""
         async with self.core.db.session() as s:
             c = await s.get(Candidate, candidate_id)
             if not c or c.status not in (CandidateStatus.CHOSEN, CandidateStatus.FAILED):
@@ -853,7 +857,7 @@ class HunterService:
             for t in pending:
                 # Paused or never answered: the engine may not even track them any more
                 t.state = TransferState.ABORTED
-                t.error = M("reason.cancelled_by_you", n=1).text
+                t.error = (error or M("reason.cancelled_by_you", n=1)).text
                 t.completed_at = datetime.now(UTC)
             c.status = CandidateStatus.FAILED
             set_reason(c, "reject_reason", reason)
@@ -980,6 +984,93 @@ class HunterService:
             await self._set_status(rg_id, AlbumStatus.PENDING_APPROVAL, M("reason.chosen_failed"))
         else:
             await self._set_status(rg_id, AlbumStatus.WANTED, M("reason.last_failed", reason=reason))
+
+    async def check_silent(self) -> None:
+        """Replaces a source that stopped sending. For `silent_source_minutes` nothing came from
+        it: no file, no byte, no step forward in its queue, or no answer at all. The tracks it
+        still owes are asked to other peers that have them; what arrived is kept.
+
+        The whole source is judged, not each file: a peer sends one file at a time, the others
+        wait in its queue without moving, and that is not silence. When nobody else has the
+        tracks, the source is left as it is: waiting is all there is to do."""
+        cfg = (await self.core.settings.get()).hunter
+        now = datetime.now(UTC)
+        if not self.core.engine.logged_in:
+            # Offline, nothing moves and no peer is to blame: the clocks start again from here
+            self._silent_floor = now
+            return
+        if not cfg.silent_source_minutes:
+            return
+        limit = now - timedelta(minutes=cfg.silent_source_minutes)
+        silent = []
+        async with self.core.db.session() as s:
+            chosen = await s.execute(select(Candidate).where(Candidate.status == CandidateStatus.CHOSEN))
+            for c in list(chosen.scalars()):
+                ts = list((await s.execute(select(Transfer).where(Transfer.candidate_id == c.id))).scalars())
+                owed = [t for t in ts if t.state not in TERMINAL and not _is_extra(t.remote_path)]
+                if not owed or any(t.state == TransferState.PAUSED for t in ts):
+                    continue  # nothing expected from it, or paused by you
+                motion = self.core.transfers.last_motion([t.id for t in owed])
+                if motion is None:
+                    continue  # not watched yet (just asked, start-up): its clock has not started
+                received = [t for t in ts if t.state == TransferState.COMPLETE and t.completed_at]
+                last = max(
+                    motion, self._silent_floor,
+                    *(_aware(t.requested_at or t.created_at) for t in ts),
+                    *(_aware(t.completed_at) for t in received),
+                )
+                if last <= limit:
+                    silent.append(c.id)
+        for cid in silent:
+            await self._replace_silent(cid, cfg.silent_source_minutes)
+
+    async def _replace_silent(self, candidate_id: int, minutes: int) -> None:
+        """What `switch_peer` does when you ask, done for a silent source: the best other peers
+        take over the tracks not received yet. Nothing changes when there is nobody else."""
+        async with self.core.db.session() as s:
+            c = await s.get(Candidate, candidate_id)
+            if not c or c.status != CandidateStatus.CHOSEN:
+                return
+            # A peer that already let this album down is not picked again on its own (another
+            # folder of the same silent peer, a source dropped earlier)
+            avoid = {c.username} | set((await s.execute(select(Candidate.username).where(
+                Candidate.release_group_id == c.release_group_id, Candidate.status == CandidateStatus.FAILED,
+            ))).scalars())
+        alts = await self.core.coverage.alternatives(candidate_id, limit=None)
+        plan: list[tuple[dict, list[int]]] = []
+        taken: set[int] = set()
+        for a in alts["alternatives"]:  # whole album first, then a free slot, then the best score
+            if a["status"] != CandidateStatus.PROPOSED or a["username"] in avoid:
+                continue
+            track_ids = [t for t in a["track_ids"] if t not in taken]
+            if track_ids:
+                plan.append((a, track_ids))
+                taken.update(track_ids)
+        if not plan:
+            return
+        reason = M("reason.silent", minutes=minutes)
+        dropped = await self._drop_source(candidate_id, reason, error=reason)
+        if dropped is None:
+            return
+        await self.core.journal.emit(
+            "download.silent",
+            M("download.silent", label=dropped["label"], peer=dropped["username"], minutes=minutes),
+            level="warning", release_group_id=dropped["rg_id"], candidate_id=candidate_id,
+            data={"to": [a["username"] for a, _ in plan]},
+        )
+        started = 0
+        for a, track_ids in plan:
+            try:
+                started += await self.complete_from(a["candidate_id"], track_ids)
+            except (UserError, EngineUnavailable) as e:
+                log.info("silent source %s: %s can't take over: %s", dropped["username"], a["username"], e)
+        if not started and not dropped["still_active"]:
+            # Nobody took over after all (Soulseek went down meanwhile): back to you
+            await self._set_status(
+                dropped["rg_id"],
+                AlbumStatus.PENDING_APPROVAL if dropped["others"] else AlbumStatus.WANTED,
+                M("reason.last_failed", reason=reason),
+            )
 
     async def check_stalled(self) -> None:
         """Drops a candidate when none of its files started within STALL_MINUTES and the peer

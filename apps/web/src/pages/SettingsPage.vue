@@ -305,6 +305,13 @@ const removeProfile = useMutation({
               <FieldDescription>{{ t('settings.hunter.stuckAttemptsHint') }}</FieldDescription>
             </Field>
           </div>
+          <Field>
+            <FieldLabel for="hss">
+              {{ t('settings.hunter.silentSource') }}
+            </FieldLabel>
+            <Input id="hss" v-model.number="form.hunter.silent_source_minutes" type="number" min="0" class="font-mono sm:max-w-40" />
+            <FieldDescription>{{ t('settings.hunter.silentSourceHint') }}</FieldDescription>
+          </Field>
         </FieldGroup>
       </TabsContent>
 

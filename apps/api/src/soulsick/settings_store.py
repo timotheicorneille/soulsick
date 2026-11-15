@@ -34,6 +34,9 @@ class HunterSettings(BaseModel):
     stuck_queue_minutes: int = Field(30, ge=1)
     # Flagged from this attempt on (0 = never)
     stuck_after_attempts: int = Field(2, ge=0)
+    # A source that sent nothing for this long is replaced by another peer that has the tracks
+    # it still owes (0 = never)
+    silent_source_minutes: int = Field(30, ge=0)
 
 
 class LibrarySettings(BaseModel):

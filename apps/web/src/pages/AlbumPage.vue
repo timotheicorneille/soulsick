@@ -316,6 +316,11 @@ const dismiss = useMutation({
                 <RadarIcon data-icon="inline-start" />
                 {{ album.status === 'imported' ? t('album.searchBetter') : t('album.searchNow') }}
               </Button>
+              <Button v-if="album.status !== 'imported' || isPartial(album)" size="sm" variant="ghost" as-child>
+                <RouterLink :to="{ name: 'search', query: { album: album.id, q: `${album.artist?.name ?? ''} ${album.title}`.trim() } }">
+                  {{ t('album.searchManually') }}
+                </RouterLink>
+              </Button>
             </div>
           </div>
 

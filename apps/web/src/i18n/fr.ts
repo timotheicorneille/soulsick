@@ -241,6 +241,7 @@ const fr: Messages = {
     cancelledHint: 'Ce qui est déjà reçu est gardé. Choisis un autre candidat, ou « Reprendre » celui-ci plus tard.',
     searchNow: 'Chercher maintenant',
     searchBetter: 'Chercher mieux',
+    searchManually: 'Chercher à la main',
     searchStarted: 'Recherche lancée — suis-la dans l’Activité',
     presentAs: 'Présent en',
     lastSearch: 'Dernière recherche {when}',

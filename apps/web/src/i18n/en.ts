@@ -242,6 +242,7 @@ const en = {
     cancelledHint: 'What arrived is kept. Pick another candidate, or “Resume” this one later.',
     searchNow: 'Search now',
     searchBetter: 'Search for better',
+    searchManually: 'Search by hand',
     searchStarted: 'Search started — follow it in Activity',
     presentAs: 'Present as',
     lastSearch: 'Last search {when}',

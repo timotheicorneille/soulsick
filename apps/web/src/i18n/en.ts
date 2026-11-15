@@ -574,6 +574,11 @@ const en = {
     emptyHint: 'To follow an artist and let Soulsick shelve things properly, use Artists instead.',
     queued: '{n} file queued | {n} files queued',
     queuedHint: 'From {peer}, to {path}',
+    forAlbum: 'Looking for a source for',
+    leaveAlbum: 'Search freely',
+    usedForAlbum: 'Folder from {peer} used for the album',
+    usedDespite: 'Taken despite: {reason}.',
+    usedReplacing: 'It replaces the source that was downloading. | It replaces the {n} sources that were downloading.',
   },
 
   browse: {
@@ -631,6 +636,7 @@ const en = {
     download: 'Folder',
     requested: 'Requested',
     rest: 'The rest ({n})',
+    useForAlbum: 'Use for this album',
     select: 'Select {name}',
   },
 

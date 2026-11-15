@@ -573,6 +573,11 @@ const fr: Messages = {
     emptyHint: 'Pour suivre un artiste et laisser Soulsick ranger proprement, passe plutôt par Artistes.',
     queued: '{n} fichier en file | {n} fichiers en file',
     queuedHint: 'Depuis {peer}, vers {path}',
+    forAlbum: 'Source cherchée pour',
+    leaveAlbum: 'Recherche libre',
+    usedForAlbum: 'Dossier de {peer} pris pour cet album',
+    usedDespite: 'Pris malgré : {reason}.',
+    usedReplacing: 'Il remplace la source en cours. | Il remplace les {n} sources en cours.',
   },
 
   browse: {
@@ -630,6 +635,7 @@ const fr: Messages = {
     download: 'Dossier',
     requested: 'Demandé',
     rest: 'Le reste ({n})',
+    useForAlbum: 'Utiliser pour cet album',
     select: 'Sélectionner {name}',
   },
 

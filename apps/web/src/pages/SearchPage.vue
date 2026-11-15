@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import type { SearchSnapshot, SearchSort } from '@/lib/types'
-import { ListFilterIcon, SearchIcon } from '@lucide/vue'
-import { keepPreviousData, useMutation, useQuery } from '@tanstack/vue-query'
+import type { AlbumDetail, Candidate, SearchFolder, SearchSnapshot, SearchSort } from '@/lib/types'
+import { DiscIcon, ListFilterIcon, SearchIcon, XIcon } from '@lucide/vue'
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/vue-query'
 import { refDebounced, useIntervalFn } from '@vueuse/core'
 import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -19,6 +19,7 @@ import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { useStatus } from '@/composables/queries'
 import { useRequestedFiles } from '@/composables/requestedFiles'
 import { api } from '@/lib/api'
+import { serverText } from '@/lib/serverText'
 import { LOSSLESS } from '@/lib/status'
 
 const { t } = useI18n()
@@ -45,7 +46,7 @@ const start = useMutation({
     ticket.value = d.ticket
     startedAt.value = Date.now()
     listenUntil.value = startedAt.value + LISTEN_MS
-    router.replace({ query: { q: q.value.trim(), t: d.ticket } })
+    router.replace({ query: { ...route.query, q: q.value.trim(), t: d.ticket } })
   },
   onError: e => toast.error(t('search.failed'), { description: e.message }),
 })
@@ -104,6 +105,52 @@ function ask(username: string, files: string[]) {
   if (fresh.length)
     download.mutate({ username, files: fresh })
 }
+
+// Opened from an album ("Search by hand"): a folder found here can become its source
+const qc = useQueryClient()
+const albumId = computed(() => (route.query.album ? Number(route.query.album) : null))
+const { data: album } = useQuery({
+  queryKey: ['album', albumId],
+  queryFn: () => api.get<AlbumDetail>(`/albums/${albumId.value}`),
+  enabled: computed(() => albumId.value != null),
+})
+
+function leaveAlbum() {
+  const { album: _, ...rest } = route.query
+  router.replace({ query: rest })
+}
+
+const useForAlbum = useMutation({
+  mutationFn: (v: { album: number, folder: SearchFolder, claimed: string[] }) =>
+    api.post<{ candidate: Candidate, created: boolean, dropped: number }>(`/albums/${v.album}/candidates`, v.folder),
+  onSuccess: (r, v) => {
+    const c = r.candidate
+    const notes = [
+      c.reject_reason ? t('search.usedDespite', { reason: serverText(c.reject_reason, c.reject_reason_t) }) : '',
+      r.dropped ? t('search.usedReplacing', r.dropped) : '',
+    ].filter(Boolean)
+    toast.success(t('search.usedForAlbum', { peer: c.username }), { description: notes.join(' ') || undefined })
+    qc.invalidateQueries({ queryKey: ['album', v.album] })
+    router.push({ name: 'album', params: { id: v.album } })
+  },
+  onError: (e, v) => {
+    requested.release(v.folder.username, v.claimed)
+    toast.error(e.message)
+  },
+})
+
+function useFolder(folder: SearchFolder) {
+  if (albumId.value == null)
+    return
+  // Claimed on click: a double click sends it once, and the folder shows as requested
+  const claimed = requested.claim(folder.username, folder.files.map(f => f.filename))
+  if (claimed.length)
+    useForAlbum.mutate({ album: albumId.value, folder, claimed })
+}
+
+// Coming from the album page: the query is filled in, the search starts by itself
+if (albumId.value != null && q.value.trim().length >= 2 && ticket.value == null)
+  start.mutate()
 </script>
 
 <template>
@@ -124,6 +171,23 @@ function ask(username: string, files: string[]) {
         {{ t('search.submit') }}
       </Button>
     </form>
+
+    <div v-if="albumId != null" class="mb-5 flex flex-wrap items-center gap-x-3 gap-y-2 rounded-xl bg-card px-4 py-3 text-[12.5px]">
+      <DiscIcon class="size-4 shrink-0 text-primary" />
+      <span class="text-muted-foreground">{{ t('search.forAlbum') }}</span>
+      <RouterLink :to="{ name: 'album', params: { id: albumId } }" class="min-w-0 truncate font-medium hover:text-primary">
+        <template v-if="album">
+          {{ album.artist?.name }} – {{ album.title }}
+        </template>
+        <template v-else>
+          #{{ albumId }}
+        </template>
+      </RouterLink>
+      <Button variant="ghost" size="xs" class="ml-auto text-muted-foreground" @click="leaveAlbum">
+        <XIcon data-icon="inline-start" />
+        {{ t('search.leaveAlbum') }}
+      </Button>
+    </div>
 
     <Alert v-if="error" variant="destructive" class="mb-5">
       <AlertDescription>{{ error.message }}</AlertDescription>
@@ -204,8 +268,10 @@ function ask(username: string, files: string[]) {
           :avg-speed="f.avg_speed"
           :queue-size="f.queue_size"
           :requested="requested.of(f.username)"
+          :for-album="albumId != null"
           show-peer
           @download="(files) => ask(f.username, files)"
+          @use-for-album="useFolder(f)"
         />
         <p v-if="!folders.length && !listening" class="py-10 text-center text-[12.5px] text-faint">
           {{ t('search.noMatch') }}

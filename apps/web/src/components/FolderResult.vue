@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { RemoteFile } from '@/lib/types'
-import { CheckIcon, ChevronDownIcon, DownloadIcon, FolderIcon } from '@lucide/vue'
+import { CheckIcon, ChevronDownIcon, DiscIcon, DownloadIcon, FolderIcon } from '@lucide/vue'
 import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { Button } from '@/components/ui/button'
@@ -23,8 +23,10 @@ const props = defineProps<{
   showPeer?: boolean
   /** Files of this folder already asked for: shown as such, never asked for again */
   requested?: ReadonlySet<string>
+  /** Searching for an album: the whole folder can become its source */
+  forAlbum?: boolean
 }>()
-const emit = defineEmits<{ download: [files: string[]] }>()
+const emit = defineEmits<{ download: [files: string[]], useForAlbum: [] }>()
 
 const { t } = useI18n()
 const open = ref(props.defaultOpen ?? false)
@@ -78,6 +80,10 @@ function toggle(name: string, on: boolean) {
         <ChevronDownIcon :class="cn('mt-0.5 ml-auto size-4 shrink-0 text-faint transition-transform', open && 'rotate-180')" />
       </CollapsibleTrigger>
       <div class="flex shrink-0 items-center gap-2">
+        <Button v-if="forAlbum" size="sm" :disabled="!remaining.length" @click="emit('useForAlbum')">
+          <DiscIcon data-icon="inline-start" />
+          {{ t('folder.useForAlbum') }}
+        </Button>
         <Button
           v-if="selected.size"
           variant="outline"

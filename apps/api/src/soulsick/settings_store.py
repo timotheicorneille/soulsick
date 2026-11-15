@@ -29,9 +29,12 @@ class HunterSettings(BaseModel):
     proposals: int = 5
     min_match: float = 0.6
     download_covers: bool = True
-    # When an album download counts as stuck (shown to you, nothing automatic)
+    # When a download counts as stuck (shown to you, nothing automatic)
     stuck_no_progress_minutes: int = Field(10, ge=1)
     stuck_queue_minutes: int = Field(30, ge=1)
+    # A request the peer never took in its queue (0 = never). Longer than silent_source_minutes
+    # and STALL_MINUTES: an album source that never answered is replaced before being flagged
+    stuck_no_answer_minutes: int = Field(60, ge=0)
     # Flagged from this attempt on (0 = never)
     stuck_after_attempts: int = Field(2, ge=0)
     # A source that sent nothing for this long is replaced by another peer that has the tracks

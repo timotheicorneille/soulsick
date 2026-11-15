@@ -104,6 +104,7 @@ EN: dict[str, str] = {
     "download.switched_search": "{label}: source {peer} dropped, searching for another peer",
     "stuck.no_progress": "no data received for {minutes} min",
     "stuck.queue_frozen": "queue position not moving for {minutes} min",
+    "stuck.no_answer": "request without answer for {minutes} min",
     "stuck.retrying": "attempt {n}",
     "hunt.fallback": "{label}: switching to the next candidate, {next}",
     "hunt.dismissed": "“{title}”: proposals rejected, will retry later",

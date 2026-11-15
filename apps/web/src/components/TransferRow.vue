@@ -87,7 +87,7 @@ const st = computed(() => {
         </TooltipTrigger>
         <TooltipContent class="max-w-64">
           <template v-if="stuck">
-            {{ stuckHint }} {{ t('transfer.stuckAction') }}
+            {{ stuckHint }} {{ tr.candidate_id ? t('transfer.stuckAction') : '' }}
           </template>
           <template v-else-if="tr.state === 'queued' && tr.direction === 'download'">
             {{ tr.remotely_queued

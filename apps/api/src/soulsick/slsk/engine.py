@@ -289,13 +289,38 @@ class SafeTransferManager(TransferManager):
                 log.debug("failed to queue transfer remotely: %s: %r", transfer, exc)
                 if transfer.state.VALUE == SlskState.QUEUED:
                     transfer.increase_queue_attempts()
-                    await transfer.state.queue()
+                    self._retry_after_cooldown(transfer.username)
                 return
             failures.pop(transfer.username, None)
         if transfer.state.VALUE == SlskState.QUEUED:
             transfer.remotely_queued = True
             transfer.reset_queue_attempts()
         self.request_management_cycle(_RequestFlag.TRANSFER_CHANGE)
+
+    def _retry_after_cooldown(self, username: str) -> None:
+        """Asks for a management cycle when the peer's cooldown ends.
+
+        After a failed queue request the download is still QUEUED, and aioslsk's QueuedState has
+        no queue() transition: nothing asked for a new cycle, and the file was only asked again
+        if another event (another transfer, a status update) woke the manager. One wake-up per
+        peer, its files are all retried by the same cycle.
+        """
+        wakes = self.__dict__.setdefault("_peer_wakes", {})
+        if username in wakes:
+            return
+        failed_at = self.__dict__.get("_peer_failures", {}).get(username, time.monotonic())
+        delay = max(0.0, failed_at + self.PEER_FAILURE_COOLDOWN - time.monotonic())
+
+        def wake():
+            wakes.pop(username, None)
+            self.request_management_cycle(_RequestFlag.TRANSFER_CHANGE)
+
+        wakes[username] = asyncio.get_running_loop().call_later(delay, wake)
+
+    async def stop(self) -> list[asyncio.Task]:
+        for wake in self.__dict__.pop("_peer_wakes", {}).values():
+            wake.cancel()
+        return await super().stop()
 
 
     # How long an upload waits for its file connection to be ready (ticket sent, offset received)

@@ -13,6 +13,7 @@ import { Button } from '@/components/ui/button'
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@/components/ui/empty'
 import { InputGroup, InputGroupAddon, InputGroupInput } from '@/components/ui/input-group'
 import { Skeleton } from '@/components/ui/skeleton'
+import { useRequestedFiles } from '@/composables/requestedFiles'
 import { api } from '@/lib/api'
 import { bytes } from '@/lib/format'
 import { isAudioName } from '@/lib/files'
@@ -43,11 +44,21 @@ const totals = computed(() => {
   return { dirs: all.length, files: all.reduce((n, d) => n + d.files.length, 0), size: all.reduce((n, d) => n + d.files.reduce((s, f) => s + (f.size ?? 0), 0), 0) }
 })
 
+const requested = useRequestedFiles()
 const download = useMutation({
   mutationFn: (files: string[]) => api.post<{ ids: number[] }>('/downloads', { username: username.value, files }),
   onSuccess: d => toast.success(t('search.queued', d.ids.length)),
-  onError: e => toast.error(e.message),
+  onError: (e, files) => {
+    requested.release(username.value, files)
+    toast.error(e.message)
+  },
 })
+
+function ask(files: string[]) {
+  const fresh = requested.claim(username.value, files)
+  if (fresh.length)
+    download.mutate(fresh)
+}
 
 function go() {
   if (input.value.trim())
@@ -121,7 +132,8 @@ function go() {
           :username="username"
           :directory="d.path"
           :files="d.files"
-          @download="(files) => download.mutate(files)"
+          :requested="requested.of(username)"
+          @download="ask"
         />
         <p v-if="dirs.length > 200" class="py-4 text-center text-[12px] text-faint">
           {{ t('browse.more', dirs.length - 200) }}

@@ -550,6 +550,14 @@ const fr: Messages = {
     failed: 'Recherche impossible',
     stats: '{peers} pairs · {files} fichiers · {folders} dossiers',
     listening: 'écoute des réponses…',
+    keepListening: 'Continuer à écouter',
+    notRefreshing: 'La page ne se rafraîchit plus ; les réponses tardives sont quand même recueillies.',
+    filter: 'Filtrer les résultats (-mot pour exclure)',
+    sortBy: 'Tri',
+    sortQueue: 'Attente',
+    sortSpeed: 'Vitesse',
+    sortSize: 'Taille',
+    beyond: '{n} dossier de plus au-delà des 300 premiers, affine le filtre. | {n} dossiers de plus au-delà des 300 premiers, affine le filtre.',
     lossless: 'Sans perte',
     lossy: 'Compressé',
     hidden: '{n} dossier masqué par les filtres | {n} dossiers masqués par les filtres',
@@ -619,6 +627,8 @@ const fr: Messages = {
   folder: {
     selected: '{n} fichier | {n} fichiers',
     download: 'Dossier',
+    requested: 'Demandé',
+    rest: 'Le reste ({n})',
     select: 'Sélectionner {name}',
   },
 

@@ -551,6 +551,14 @@ const en = {
     failed: 'Search failed',
     stats: '{peers} peers · {files} files · {folders} folders',
     listening: 'listening for answers…',
+    keepListening: 'Keep listening',
+    notRefreshing: 'The page no longer refreshes; late answers are still collected.',
+    filter: 'Filter results (-word to exclude)',
+    sortBy: 'Sort',
+    sortQueue: 'Queue',
+    sortSpeed: 'Speed',
+    sortSize: 'Size',
+    beyond: '{n} more folder past the first 300, refine the filter. | {n} more folders past the first 300, refine the filter.',
     lossless: 'Lossless',
     lossy: 'Lossy',
     hidden: '{n} folder hidden by the filters | {n} folders hidden by the filters',
@@ -620,6 +628,8 @@ const en = {
   folder: {
     selected: '{n} file | {n} files',
     download: 'Folder',
+    requested: 'Requested',
+    rest: 'The rest ({n})',
     select: 'Select {name}',
   },
 

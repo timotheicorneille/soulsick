@@ -65,6 +65,20 @@ watch(album, (a) => {
     tab.value = a.candidates.length && !['imported', 'downloading', 'importing'].includes(a.status) ? 'candidates' : 'tracks'
 }, { immediate: true })
 
+// A hunt that ends with candidates to approve says so and shows them. Only on a change
+// seen here: an album already waiting for approval when the page opens stays quiet.
+let seen: { id: number, status: string } | null = null
+watch(album, (a) => {
+  if (!a)
+    return
+  const before = seen?.id === a.id ? seen.status : null
+  seen = { id: a.id, status: a.status }
+  if (!before || before === a.status || a.status !== 'pending_approval')
+    return
+  toast.success(t('album.toApprove', a.candidates.filter(c => c.status === 'proposed').length))
+  tab.value = 'candidates'
+})
+
 const release = computed<Release | undefined>(() =>
   album.value?.releases.find(r => String(r.id) === viewRelease.value),
 )

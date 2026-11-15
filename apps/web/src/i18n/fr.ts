@@ -242,6 +242,7 @@ const fr: Messages = {
     searchNow: 'Chercher maintenant',
     searchBetter: 'Chercher mieux',
     searchStarted: 'Recherche lancée — suis-la dans l’Activité',
+    toApprove: '{n} candidat à valider | {n} candidats à valider',
     presentAs: 'Présent en',
     lastSearch: 'Dernière recherche {when}',
     downloadStarted: 'Téléchargement lancé',

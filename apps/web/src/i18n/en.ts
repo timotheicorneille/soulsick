@@ -243,6 +243,7 @@ const en = {
     searchNow: 'Search now',
     searchBetter: 'Search for better',
     searchStarted: 'Search started — follow it in Activity',
+    toApprove: '{n} candidate to approve | {n} candidates to approve',
     presentAs: 'Present as',
     lastSearch: 'Last search {when}',
     downloadStarted: 'Download started',

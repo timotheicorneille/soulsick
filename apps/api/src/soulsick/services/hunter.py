@@ -254,23 +254,7 @@ class HunterService:
                 await s.delete(o)
             rows = []
             for c in keep:
-                row = Candidate(
-                    release_group_id=rg_id,
-                    search_run_id=run_ids[-1] if run_ids else None,
-                    username=c.username,
-                    directory=c.directory,
-                    files=[f.to_dict() for f in c.audio_files] + [f.to_dict() | {"extra": True} for f in c.extra_files],
-                    format=c.format,
-                    score=c.score,
-                    score_detail=c.detail,
-                    status=CandidateStatus.REJECTED if c.rejected else CandidateStatus.PROPOSED,
-                    reject_reason=c.reject_reason.text if c.reject_reason else None,
-                    reject_reason_t=c.reject_reason.to_json() if c.reject_reason else None,
-                    matched_release_id=c.release_id,
-                    has_free_slots=c.has_free_slots,
-                    queue_size=c.queue_size,
-                    avg_speed=c.avg_speed,
-                )
+                row = candidate_row(rg_id, run_ids[-1] if run_ids else None, c)
                 s.add(row)
                 rows.append(row)
             await s.commit()
@@ -833,6 +817,70 @@ class HunterService:
         asyncio.create_task(self.hunt(rg_id, "manual", replace=True))
         return len(active)
 
+    async def add_folder(self, rg_id: int, folder: PeerResult) -> int | None:
+        """A folder picked in a search, scored and stored as a hunt would (same row, same score).
+        None when it holds no audio file."""
+        loaded = await self._load(rg_id)
+        if not loaded:
+            raise UserError("error.album_not_found")
+        rg, artist, profile = loaded
+        releases = await self.core.catalog.releases_with_tracks(rg_id)
+        if not releases:
+            raise UserError("reason.no_edition")
+        cfg = (await self.core.settings.get()).hunter
+        options = await self._options(rg, releases)
+        scored = await asyncio.to_thread(
+            rank_candidates,
+            [folder], options, profile.formats, profile.max_missing_tracks, cfg.min_match, artist.name,
+        )
+        if not scored:
+            return None
+        async with self.core.db.session() as s:
+            row = candidate_row(rg_id, None, scored[0])
+            s.add(row)
+            await s.commit()
+            return row.id
+
+    async def take_folder(self, candidate_id: int) -> int:
+        """« Utiliser pour cet album »: this folder becomes the album's source, even when the
+        scoring rejected it (your choice, as when you approve a rejected candidate). Sources
+        downloading are replaced as with « Changer de pair »: dropped, what arrived is kept,
+        and the folder is asked only the tracks still missing when it has them. Returns the
+        number of sources dropped."""
+        async with self.core.db.session() as s:
+            c = await s.get(Candidate, candidate_id)
+            if not c:
+                raise UserError("error.candidate_not_found")
+            rg_id, username = c.release_group_id, c.username
+            active = list((await s.execute(select(Candidate.id).where(
+                Candidate.release_group_id == rg_id, Candidate.status == CandidateStatus.CHOSEN,
+                Candidate.id != candidate_id,
+            ))).scalars())
+            started = (await s.execute(
+                select(Transfer.id).where(Transfer.candidate_id == candidate_id).limit(1)
+            )).first()
+        reason = M("reason.switched", peer=username)
+        dropped = [d for cid in active if (d := await self._drop_source(cid, reason))]
+        cover = await self.core.coverage.album(rg_id, offers=None)
+        missing = [t["track_id"] for t in cover["tracks"] if t["state"] == "missing"]
+        for d in dropped:
+            await self.core.journal.emit(
+                "download.switched",
+                M("download.switched", label=d["label"], old=d["username"], new=username, n=len(missing)),
+                release_group_id=rg_id, candidate_id=candidate_id,
+            )
+        if started:
+            # Already a source of this album once: as an approval, only what it did not bring is asked
+            await self.resume_candidate(candidate_id)
+        elif any(t["state"] == "received" for t in cover["tracks"]) and (
+            tids := [x["track_id"] for f in cover["fillers"] if f["candidate_id"] == candidate_id
+                     for x in f["tracks"]]
+        ):
+            await self.complete_from(candidate_id, tids)
+        else:
+            await self.start_download(candidate_id, by="user")
+        return len(dropped)
+
     async def _drop_source(self, candidate_id: int, reason: Msg) -> dict | None:
         """Cancels the unfinished files of a source (what arrived is kept) and marks it failed.
         The album status is left to the caller."""
@@ -1014,6 +1062,27 @@ class HunterService:
             "last_run_at": self.last_run_at.isoformat() if self.last_run_at else None,
             "next_run_at": self.next_run_at.isoformat() if self.next_run_at else None,
         }
+
+
+def candidate_row(rg_id: int, run_id: int | None, c: ScoredCandidate) -> Candidate:
+    """A scored folder as stored, whether a hunt found it or you picked it in a search."""
+    return Candidate(
+        release_group_id=rg_id,
+        search_run_id=run_id,
+        username=c.username,
+        directory=c.directory,
+        files=[f.to_dict() for f in c.audio_files] + [f.to_dict() | {"extra": True} for f in c.extra_files],
+        format=c.format,
+        score=c.score,
+        score_detail=c.detail,
+        status=CandidateStatus.REJECTED if c.rejected else CandidateStatus.PROPOSED,
+        reject_reason=c.reject_reason.text if c.reject_reason else None,
+        reject_reason_t=c.reject_reason.to_json() if c.reject_reason else None,
+        matched_release_id=c.release_id,
+        has_free_slots=c.has_free_slots,
+        queue_size=c.queue_size,
+        avg_speed=c.avg_speed,
+    )
 
 
 def _aware(dt: datetime) -> datetime:

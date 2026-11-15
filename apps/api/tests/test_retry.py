@@ -188,3 +188,44 @@ async def test_reprise_au_demarrage_reactive_le_candidat(ctx):  # noqa: F811
     album = (await client.get(f"/api/albums/{rid}")).json()
     assert album["status"] == "downloading"
     assert next(c for c in album["candidates"] if c["id"] == cid)["status"] == "chosen"
+
+
+async def test_source_remplacee_pendant_le_delai_plus_rien_ne_lui_est_demande(ctx):  # noqa: F811
+    """goodpeer refuse la piste 2, la relance est programmée. Avant qu'elle parte, la source est
+    remplacée par otherpeer : la piste ne doit plus être redemandée à goodpeer (avant : elle
+    l'était, et restait "en file" chez un pair déjà quitté)."""
+    client, core, engine, env = ctx
+    await client.post("/api/auth/setup", json={"username": "admin", "password": "motdepasse"})
+    artist = {"mbid": "x", "mode": "validation", "primary_types": ["album"], "monitor": "all"}
+    aid = (await client.post("/api/artists", json=artist)).json()["id"]
+    albums = (await client.get(f"/api/artists/{aid}")).json()["release_groups"]
+    rid = next(rg["id"] for rg in albums if rg["title"] == "Nevermind")
+    engine.results = [peer_with_album("goodpeer"), peer_with_album("otherpeer")]
+    engine.script[f"goodpeer:{FILE2}"] = ["fail", "hold"]
+    core.hunter.retry_delays = [0.4, 0.4]
+    await core.hunter.hunt(rid)
+    cands = (await client.get(f"/api/albums/{rid}")).json()["candidates"]
+    good = next(c for c in cands if c["username"] == "goodpeer")
+    other = next(c for c in cands if c["username"] == "otherpeer")
+    await client.post(f"/api/candidates/{good['id']}/approve")
+
+    async def retry_scheduled():
+        return bool(core.hunter._retrying)
+
+    await wait_for(retry_scheduled)
+    r = await client.post(f"/api/candidates/{good['id']}/switch", json={"to": other["id"]})
+    assert r.status_code == 200
+
+    async def retry_over():
+        return not core.hunter._retrying
+
+    await wait_for(retry_over)
+    asked = [u for u, p, _ in engine.downloads if p.endswith(FILE2)]
+    assert asked == ["goodpeer", "otherpeer"], "une seule demande à goodpeer : la première"
+    second = next(t for t in await _rows(core) if t.username == "goodpeer" and t.remote_path.endswith(FILE2))
+    assert second.state == "failed" and second.attempts == 1
+
+    async def imported():
+        return await _status(client, rid) == "imported"
+
+    await wait_for(imported)

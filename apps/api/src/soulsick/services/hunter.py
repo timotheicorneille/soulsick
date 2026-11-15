@@ -643,7 +643,11 @@ class HunterService:
                     t = await s.get(Transfer, tid)
                     # The peer may have restarted it meanwhile: only re-request what still failed
                     still_failed = bool(t and t.state == TransferState.FAILED)
-                if still_failed:
+                    # Its source may have been dropped during the delay (another peer took over,
+                    # the album was cancelled): nothing is asked from it any more
+                    c = await s.get(Candidate, t.candidate_id) if t and t.candidate_id else None
+                    still_chosen = bool(c and c.status == CandidateStatus.CHOSEN)
+                if still_failed and still_chosen:
                     try:
                         await self.core.transfers.requeue(tid)
                     except EngineUnavailable as e:

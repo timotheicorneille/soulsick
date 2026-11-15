@@ -19,6 +19,7 @@ import ImportReview from '@/components/ImportReview.vue'
 import LyricsTag from '@/components/LyricsTag.vue'
 import SignalChain from '@/components/SignalChain.vue'
 import StatusBadge from '@/components/StatusBadge.vue'
+import StuckBanner from '@/components/StuckBanner.vue'
 import TrackCoverage from '@/components/TrackCoverage.vue'
 import TransferRow from '@/components/TransferRow.vue'
 import { Button } from '@/components/ui/button'
@@ -33,7 +34,7 @@ import { useAlbum } from '@/composables/queries'
 import { useTransferActions } from '@/composables/transferActions'
 import { api } from '@/lib/api'
 import { ago, bytes, ms, year } from '@/lib/format'
-import { albumStatus, FORMAT_LABELS, releaseTypeLabel } from '@/lib/status'
+import { albumStatus, FORMAT_LABELS, isStuck, releaseTypeLabel } from '@/lib/status'
 import { cn } from '@/lib/utils'
 import { useLive } from '@/stores/live'
 import { serverText } from '@/lib/serverText'
@@ -122,6 +123,8 @@ const stuckSources = computed(() => new Set((album.value?.transfers ?? [])
   .map(tr => ({ ...tr, ...live.transfers.get(tr.id) }))
   .filter(tr => tr.stuck && tr.candidate_id && ['queued', 'initializing', 'transferring'].includes(tr.state!))
   .map(tr => tr.candidate_id!)))
+/** Its downloads that stopped moving, flagged above the download panel */
+const stuckCount = computed(() => (album.value?.transfers ?? []).filter(tr => isStuck({ ...tr, ...live.transfers.get(tr.id) })).length)
 const canApprove = computed(() => !!album.value && !['downloading', 'importing', 'searching'].includes(album.value.status))
 const typeLabel = computed(() => {
   const a = album.value
@@ -346,6 +349,8 @@ const dismiss = useMutation({
       </header>
 
       <ImportReview v-if="reviewCandidate" :candidate-id="reviewCandidate.id" :releases="album.releases" />
+
+      <StuckBanner :count="stuckCount" />
 
       <!-- The whole download in one place, until the album is shelved -->
       <DownloadPanel

@@ -66,8 +66,16 @@ class LibraryService:
         # Lyrics files next to the tracks, by folder and name: (dir, stem) -> extensions
         sidecars: dict[tuple[str, str], set[str]] = defaultdict(set)
 
+        # Folders that could not be listed and files that could not be examined: what was known
+        # under them is kept, a read that fails is not a file that is gone
+        unlisted: list[str] = []
+        unread: set[str] = set()
+
         def walk() -> None:
-            for dirpath, dirnames, filenames in os.walk(root):
+            def failed(e: OSError) -> None:
+                unlisted.append(e.filename or root)
+
+            for dirpath, dirnames, filenames in os.walk(root, onerror=failed):
                 dirnames[:] = [d for d in dirnames if not d.startswith(".")]
                 for fn in filenames:
                     stem, ext = os.path.splitext(fn)
@@ -77,7 +85,10 @@ class LibraryService:
                         p = os.path.join(dirpath, fn)
                         try:
                             st = os.stat(p)
+                        except FileNotFoundError:
+                            continue
                         except OSError:
+                            unread.add(p)
                             continue
                         on_disk[p] = (st.st_size, st.st_mtime)
 
@@ -85,7 +96,11 @@ class LibraryService:
 
         async with self.core.db.session() as s:
             known = {f.path: f for f in (await s.execute(select(LibraryFile))).scalars()}
-            removed = [p for p in known if p not in on_disk]
+            kept_dirs = tuple(d.rstrip(os.sep) + os.sep for d in unlisted)
+            removed = [
+                p for p in known
+                if p not in on_disk and p not in unread and not (kept_dirs and p.startswith(kept_dirs))
+            ]
             if removed:
                 await s.execute(delete(LibraryFile).where(LibraryFile.path.in_(removed)))
             # Files from before lyrics were tracked (lyrics_embedded unknown) are read once more
@@ -94,7 +109,12 @@ class LibraryService:
                 if p not in known or known[p].mtime != mt or known[p].lyrics_embedded is None
             ]
             for p in changed:
-                meta = await asyncio.to_thread(read_meta, p)
+                try:
+                    meta = await asyncio.to_thread(read_meta, p, True)
+                except OSError:
+                    # There but unreadable right now: what was known stays, read again at the next scan
+                    unread.add(p)
+                    continue
                 row = known.get(p) or LibraryFile(path=p)
                 row.size, row.mtime = on_disk[p]
                 row.format = meta.format
@@ -112,6 +132,8 @@ class LibraryService:
                 known[p] = row
             # Checked on every scan: a .lrc added or removed doesn't touch its track
             for p in on_disk:
+                if p not in known:
+                    continue
                 stem = os.path.splitext(os.path.basename(p))[0]
                 sidecar = best_sidecar(sidecars.get((os.path.dirname(p), stem), set()))
                 if known[p].lyrics_file != sidecar:
@@ -123,12 +145,21 @@ class LibraryService:
         task = asyncio.create_task(self.core.catalog.from_library())
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
-        stats = {"files": len(on_disk), "new_or_changed": len(changed), "removed": len(removed)}
+        read = len(changed) - len(unread.intersection(changed))
+        stats = {"files": len(on_disk), "new_or_changed": read, "removed": len(removed)}
         await self.core.journal.emit(
             "library.scanned",
-            M("library.scanned", n=len(on_disk), changed=len(changed), removed=len(removed)),
+            M("library.scanned", n=len(on_disk), changed=read, removed=len(removed)),
             data=stats,
         )
+        if unlisted or unread:
+            stats["unreadable"] = len(unlisted) + len(unread)
+            await self.core.journal.emit(
+                "library.scan_partial",
+                M("library.scan_partial", folders=len(unlisted), files=len(unread)),
+                level="warning",
+                data={"folders": unlisted[:20], "files": sorted(unread)[:20]},
+            )
         return stats
 
     async def refresh_all(self) -> None:

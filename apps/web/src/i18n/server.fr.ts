@@ -116,6 +116,7 @@ const serverFr: Record<string, string> = {
   'musicbrainz.detail.shared': ', {n} partagée avec un autre artiste suivi ({titles}) | , {n} partagées avec un autre artiste suivi ({titles})',
   'musicbrainz.sync_failed': 'Synchronisation MusicBrainz échouée pour {name} : {error}',
   'library.scan_skipped': 'Analyse de la bibliothèque sautée : {problem}',
+  'library.scan_partial': 'Analyse de la bibliothèque incomplète : {folders} dossiers et {files} fichiers illisibles, ce qui était connu est gardé',
   'library.guard.missing': 'le dossier de la bibliothèque {path} n’existe pas',
   'library.guard.not_mounted': '{path} n’est pas monté depuis ton ordinateur (vérifie les volumes dans docker-compose.yml) : la musique resterait dans le conteneur',
   'library.guard.anonymous': '{path} est un volume Docker anonyme, pas ton dossier musique (vérifie les volumes dans docker-compose.yml)',

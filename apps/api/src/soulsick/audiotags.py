@@ -80,12 +80,24 @@ def _num(v: str | None) -> int | None:
         return None
 
 
-def read_meta(path: str | Path) -> AudioMeta:
+def _os_error(e: BaseException) -> OSError | None:
+    """The system error behind a failed read, if any (mutagen wraps it in a MutagenError)."""
+    for x in (e, e.__cause__, *e.args[:1]):
+        if isinstance(x, OSError):
+            return x
+    return None
+
+
+def read_meta(path: str | Path, strict: bool = False) -> AudioMeta:
+    """`strict`: a file that could not be opened or read raises OSError, instead of passing
+    for a file without tags (a file mutagen doesn't understand still comes back empty)."""
     meta = AudioMeta()
     try:
         raw = mutagen.File(path)
     except Exception as e:
         log.debug("reading %s: %s", path, e)
+        if strict and (err := _os_error(e)):
+            raise err from e
         return meta
     if raw is None:
         return meta

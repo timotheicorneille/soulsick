@@ -138,6 +138,7 @@ EN: dict[str, str] = {
     "lyrics.library_done": "Lyrics: {n} found on LRCLIB out of {total} tracks asked",
     "lyrics.unavailable": "LRCLIB doesn’t answer ({error}): stopped after {done} of {total} tracks, the rest next time",
     "library.scan_skipped": "Library scan skipped: {problem}",
+    "library.scan_partial": "Scan incomplete: {folders} folders, {files} files unreadable, kept as known",
     "library.guard.missing": "the library folder {path} doesn’t exist",
     "library.guard.not_mounted": "{path} isn’t mounted from your computer (check the volumes in docker-compose.yml): music would stay inside the container",
     "library.guard.anonymous": "{path} is an anonymous Docker volume, not your music folder (check the volumes in docker-compose.yml)",

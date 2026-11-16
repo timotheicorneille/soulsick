@@ -811,6 +811,8 @@ const en = {
       proposals: 'Proposals in ask-me mode',
       minMatch: 'Minimum title match',
       minMatchHint: '0.6 = 60 % average similarity with the MusicBrainz tracklist.',
+      maxAlbum: 'Maximum album size (MB)',
+      maxAlbumHint: 'A heavier folder is rejected, you can still take it yourself. A CD-quality FLAC album weighs 250 to 500 MB, a 24-bit one often over 1 GB. 0 = no limit.',
       extras: 'Also download covers, .cue and .log from the folder',
       stuckIntro: 'When an album download counts as stuck. Nothing is done automatically: it is flagged, and you can switch peer.',
       stuckNoProgress: 'Without data received (min)',

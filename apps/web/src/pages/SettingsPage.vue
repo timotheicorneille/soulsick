@@ -276,6 +276,13 @@ const removeProfile = useMutation({
               <FieldDescription>{{ t('settings.hunter.minMatchHint') }}</FieldDescription>
             </Field>
           </div>
+          <Field>
+            <FieldLabel for="hma">
+              {{ t('settings.hunter.maxAlbum') }}
+            </FieldLabel>
+            <Input id="hma" v-model.number="form.hunter.max_album_mb" type="number" min="0" step="50" class="font-mono sm:max-w-48" />
+            <FieldDescription>{{ t('settings.hunter.maxAlbumHint') }}</FieldDescription>
+          </Field>
           <Field orientation="horizontal">
             <Switch id="hc" v-model="form.hunter.download_covers" />
             <FieldLabel for="hc">

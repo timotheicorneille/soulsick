@@ -832,6 +832,8 @@ const fr: Messages = {
       proposals: 'Propositions en mode « me demander »',
       minMatch: 'Correspondance minimale des titres',
       minMatchHint: '0,6 = 60 % de ressemblance moyenne avec la tracklist MusicBrainz.',
+      maxAlbum: 'Taille maximale par album (Mo)',
+      maxAlbumHint: 'Un dossier plus lourd est refusé, tu peux quand même le prendre à la main. Un album FLAC qualité CD pèse 250 à 500 Mo, un 24 bits souvent plus de 1 Go. 0 = pas de limite.',
       extras: 'Télécharger aussi pochettes, .cue et .log du dossier',
       stuckIntro: 'Quand un téléchargement compte comme bloqué. Rien n’est fait automatiquement : il est signalé, et pour un album tu peux changer de pair.',
       stuckNoProgress: 'Sans donnée reçue (min)',

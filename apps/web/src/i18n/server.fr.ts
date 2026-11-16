@@ -59,7 +59,6 @@ const serverFr: Record<string, string> = {
   'reject.no_tracklist': 'Aucune tracklist MusicBrainz disponible',
   'reject.missing_tracks': '{n} piste manquante sur {total} (toléré : {allowed}) | {n} pistes manquantes sur {total} (toléré : {allowed})',
   'reject.titles': 'Titres trop différents de la tracklist ({score} % < {min} %)',
-  'reject.too_big': 'Trop lourd : {size} Mo (limite : {max} Mo)',
 
   'app.started': 'Soulsick démarré',
   'transfer.repaired': '{n} transfert relancé rattaché à son album | {n} transferts relancés rattachés à leur album',

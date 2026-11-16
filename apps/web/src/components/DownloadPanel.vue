@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import type { DownloadWait } from '@/lib/status'
 import type { Coverage, CoverageFiller, CoverageHolder, CoverageSource, CoverageTrack, Transfer } from '@/lib/types'
 import { ArrowDownToLineIcon, XIcon } from '@lucide/vue'
 import { useMutation, useQueryClient } from '@tanstack/vue-query'
@@ -10,6 +11,7 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { Spinner } from '@/components/ui/spinner'
 import { api } from '@/lib/api'
 import { speed } from '@/lib/format'
+import { downloadWait, downloadWaitHint } from '@/lib/status'
 import { cn } from '@/lib/utils'
 import { useLive } from '@/stores/live'
 import FormatTag from './FormatTag.vue'
@@ -48,23 +50,38 @@ function lead(tr: CoverageTrack): CoverageSource | undefined {
   return tr.sources[0]
 }
 
-function line(tr: CoverageTrack): { text: string, tone: string } {
+/** A track waiting on its source, in the words of this panel (the transfer rows use badges) */
+function waitText(w: DownloadWait, peer: string): string {
+  if (w.kind === 'stuck')
+    return t('download.track.stuck', { peer })
+  if (w.kind === 'requested')
+    return t('download.track.requested', { peer })
+  if (w.kind === 'connecting')
+    return t('download.track.connecting', { peer })
+  return w.place ? t('download.track.inTheirQueueAt', { pos: w.place, peer }) : t('download.track.inTheirQueue', { peer })
+}
+
+function line(tr: CoverageTrack): { text: string, tone: string, hint?: string } {
   const src = lead(tr)
   if (tr.state === 'in_library')
     return { text: t('download.track.inLibrary'), tone: 'text-success/80' }
   if (tr.state === 'received')
     return { text: t('download.track.received', { peer: src?.username }), tone: 'text-success' }
   if (src && ACTIVE.includes(src.state)) {
-    const l = liveOf(src)
-    if (l.state === 'transferring') {
-      const pct = l.size ? Math.round(((l.bytes_transferred ?? 0) / l.size) * 100) : 0
-      return { text: t('download.track.transferring', { pct, peer: src.username }), tone: 'text-primary' }
+    const row = liveOf(src)
+    const l = { ...row, direction: 'download' as const, username: src.username, state: row.state ?? src.state }
+    const w = downloadWait(l)
+    if (w) {
+      return {
+        text: waitText(w, src.username),
+        tone: w.kind === 'stuck' ? 'text-warning' : 'text-muted-foreground',
+        hint: downloadWaitHint(l, w) ?? undefined,
+      }
     }
     if (l.state === 'paused')
       return { text: t('download.track.paused', { peer: src.username }), tone: 'text-muted-foreground' }
-    return l.place_in_queue
-      ? { text: t('download.track.queuedAt', { pos: l.place_in_queue, peer: src.username }), tone: 'text-muted-foreground' }
-      : { text: t('download.track.queued', { peer: src.username }), tone: 'text-muted-foreground' }
+    const pct = l.size ? Math.round(((l.bytes_transferred ?? 0) / l.size) * 100) : 0
+    return { text: t('download.track.transferring', { pct, peer: src.username }), tone: 'text-primary' }
   }
   if (src?.state === 'failed')
     return { text: t('download.track.refused', { peer: src.username }), tone: 'text-destructive' }
@@ -171,7 +188,7 @@ const fill = useMutation({
         <span class="font-mono text-[11.5px] text-faint tnum">{{ String(tr.position).padStart(2, '0') }}</span>
         <span class="flex min-w-0 flex-col">
           <span class="truncate">{{ tr.title }}</span>
-          <span :class="cn('truncate text-[11.5px]', line(tr).tone)">{{ line(tr).text }}</span>
+          <span :class="cn('truncate text-[11.5px]', line(tr).tone)" :title="line(tr).hint">{{ line(tr).text }}</span>
         </span>
         <Popover v-if="!['received', 'in_library'].includes(tr.state) && tr.holders?.length">
           <PopoverTrigger as-child>

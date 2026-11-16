@@ -1,5 +1,6 @@
-import type { AlbumStatus, TransferStateName } from './types'
+import type { AlbumStatus, Transfer, TransferStateName } from './types'
 import { t, te } from '@/i18n'
+import { ago } from './format'
 
 /** The chain: the four stages an album goes through, from wanted to shelved. */
 export const CHAIN_STAGES = ['wanted', 'found', 'received', 'shelved'] as const
@@ -44,6 +45,67 @@ const TRANSFER_BADGE: Record<TransferStateName, BadgeTone> = {
 
 export function transferState(s: TransferStateName): { label: string, badge: BadgeTone } {
   return { label: t(`transferState.${s}`), badge: TRANSFER_BADGE[s] }
+}
+
+/** What the wait of a download depends on: a transfer row, merged with its live progress */
+export type Waiting = Pick<Transfer, 'direction' | 'state' | 'username'>
+  & Partial<Pick<Transfer, 'remotely_queued' | 'place_in_queue' | 'attempts' | 'stuck' | 'stuck_reason' | 'stuck_since' | 'candidate_id'>>
+
+/** What a download is waiting for, when its state alone says too little */
+export type DownloadWait =
+  | { kind: 'stuck' }
+  | { kind: 'requested' }
+  | { kind: 'inTheirQueue', place: number | null }
+  | { kind: 'connecting', seconds: number | null }
+
+/** Album download that stopped moving (see the stuck_* hunter settings) */
+export function isStuck(tr: Waiting): boolean {
+  return !!tr.stuck && tr.direction === 'download' && ['queued', 'initializing', 'transferring'].includes(tr.state)
+}
+
+/**
+ * "Queued" alone means nothing: did the peer answer, where are we in their queue, is their file
+ * connection on its way? Stuck comes first, it is what needs you. `connecting` is how long the
+ * download has been connecting, when the caller keeps that clock.
+ */
+export function downloadWait(tr: Waiting, connecting: number | null = null): DownloadWait | null {
+  if (tr.direction !== 'download')
+    return null
+  if (isStuck(tr))
+    return { kind: 'stuck' }
+  if (tr.state === 'queued')
+    return tr.remotely_queued ? { kind: 'inTheirQueue', place: tr.place_in_queue ?? null } : { kind: 'requested' }
+  if (tr.state === 'initializing')
+    return { kind: 'connecting', seconds: connecting }
+  return null
+}
+
+/** Badge of a transfer: what it waits for, else its state */
+export function transferStatus(tr: Waiting, connecting: number | null = null): { label: string, badge: BadgeTone } {
+  const w = downloadWait(tr, connecting)
+  if (w?.kind === 'stuck')
+    return { label: t('transfer.stuck'), badge: 'warning' }
+  if (w?.kind === 'requested')
+    return { label: t('transfer.requested'), badge: 'quiet' }
+  if (w?.kind === 'inTheirQueue')
+    return { label: w.place ? t('transfer.inTheirQueueAt', { n: w.place }) : t('transfer.inTheirQueue'), badge: 'signal' }
+  if (w?.kind === 'connecting' && w.seconds !== null && w.seconds >= 3)
+    return { label: t('transfer.connectingFor', { s: w.seconds }), badge: w.seconds >= 30 ? 'warning' : 'signal' }
+  return transferState(tr.state)
+}
+
+/** Why a download waits, in a sentence (tooltip); null when it doesn't.
+ * Changing peer is only offered for an album source: a manual download has no other candidate. */
+export function downloadWaitHint(tr: Waiting, w: DownloadWait | null): string | null {
+  if (w?.kind === 'stuck')
+    return `${t(`transfer.stuckWhy.${tr.stuck_reason}`, { since: ago(tr.stuck_since), n: tr.attempts ?? 1, place: tr.place_in_queue ?? '?' })}${tr.candidate_id ? ` ${t('transfer.stuckAction')}` : ''}`
+  if (w?.kind === 'requested')
+    return t('transfer.requestedHint', { peer: tr.username })
+  if (w?.kind === 'inTheirQueue')
+    return t('transfer.acceptedHint', { peer: tr.username })
+  if (w?.kind === 'connecting')
+    return t('transfer.connectingHint', { peer: tr.username })
+  return null
 }
 
 export const FORMAT_LABELS: Record<string, string> = {

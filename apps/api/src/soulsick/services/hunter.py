@@ -81,6 +81,16 @@ def summarize_rejections(cands: list[ScoredCandidate]) -> dict[str, int]:
     return dict(c.most_common(6))
 
 
+def rejections_msg(rejections: dict[str, int]) -> list:
+    """The summary as a sentence fragment: "format not allowed ×3, missing tracks ×2"."""
+    parts: list = []
+    for key, n in rejections.items():
+        if parts:
+            parts.append(", ")
+        parts.append(M(key.replace("reject.", "rejections.", 1), n=n))
+    return parts
+
+
 class HunterService:
     def __init__(self, core: Core) -> None:
         self.core = core
@@ -290,8 +300,13 @@ class HunterService:
 
         rejections = summarize_rejections(scored)
         if not valid:
-            reason = M("reason.no_valid", n=len(scored))
-            await self._set_status(rg_id, AlbumStatus.WANTED, reason, searched=True)
+            reason = (
+                M("reason.no_valid_why", n=len(scored), rejections=rejections_msg(rejections))
+                if rejections else M("reason.no_valid", n=len(scored))
+            )
+            # The album says why nothing was kept and when the hunt comes back to it
+            retry = M("reason.next_hunt", reason=reason, hours=RETRY_HOURS)
+            await self._set_status(rg_id, AlbumStatus.WANTED, retry, searched=True)
             await self.core.journal.emit(
                 "hunt.no_candidate",
                 M("hunt.no_candidate", label=label, reason=reason, hours=RETRY_HOURS),

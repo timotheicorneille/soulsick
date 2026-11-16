@@ -134,7 +134,7 @@ async def test_no_candidate_keeps_wanted_with_reason(ctx):
     album = (await client.get(f"/api/albums/{rid}")).json()
     assert album["status"] == "wanted"
     assert album["status_reason"].startswith("No valid candidate")
-    assert album["status_reason_t"] == {"key": "reason.no_valid", "params": {"n": 0}}
+    assert album["status_reason_t"]["params"]["reason"] == {"key": "reason.no_valid", "params": {"n": 0}}
 
 
 async def test_share_rules_preview(ctx, tmp_path):

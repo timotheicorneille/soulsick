@@ -33,6 +33,8 @@ EN: dict[str, str] = {
     "reason.no_edition": "No edition known on MusicBrainz",
     "reason.soulseek_unavailable": "Soulseek unavailable: {error}",
     "reason.no_valid": "No valid candidate among {n} folder | No valid candidate among {n} folders",
+    "reason.no_valid_why": "No valid candidate among {n} folder: {rejections} | No valid candidate among {n} folders: {rejections}",
+    "reason.next_hunt": "{reason}. Next automatic search no sooner than {hours} h after this one",
     "reason.awaiting": "{n} proposal awaiting approval | {n} proposals awaiting approval",
     "reason.from_peer": "From {peer}",
     "reason.complement_from": "Completing from {peer}",
@@ -74,6 +76,13 @@ EN: dict[str, str] = {
     "reject.no_tracklist": "No MusicBrainz tracklist available",
     "reject.missing_tracks": "{n} track missing out of {total} (allowed: {allowed}) | {n} tracks missing out of {total} (allowed: {allowed})",
     "reject.titles": "Titles too different from the tracklist ({score} % < {min} %)",
+    # --- rejection summary of a hunt (reason.no_valid_why), one per reject.* key
+    "rejections.not_better": "not better than the present version ×{n}",
+    "rejections.unknown_format": "unrecognised format ×{n}",
+    "rejections.format_refused": "format not allowed ×{n}",
+    "rejections.no_tracklist": "no MusicBrainz tracklist ×{n}",
+    "rejections.missing_tracks": "missing tracks ×{n}",
+    "rejections.titles": "titles too different ×{n}",
 
     # --- journal
     "app.started": "Soulsick started",

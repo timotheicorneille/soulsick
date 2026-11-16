@@ -28,8 +28,8 @@ class HunterSettings(BaseModel):
     search_wait_seconds: int = 25
     proposals: int = 5
     min_match: float = 0.6
-    # A folder heavier than this is rejected (0 = no limit): you can still take it yourself
-    max_album_mb: int = Field(0, ge=0)
+    # A preference, not a limit (0 = none): a heavier folder is kept but ranked after the lighter ones
+    preferred_album_mb: int = Field(0, ge=0)
     download_covers: bool = True
     # When a download counts as stuck (shown to you, nothing automatic)
     stuck_no_progress_minutes: int = Field(10, ge=1)

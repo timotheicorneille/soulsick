@@ -364,7 +364,7 @@ class HunterService:
         scored = await asyncio.to_thread(
             rank_candidates,
             results, options, profile.formats, profile.max_missing_tracks, cfg.min_match, artist_name,
-            cfg.max_album_mb,
+            cfg.preferred_album_mb,
         )
         log.info(
             "%s: %d folders scored in %.1f s (%d MusicBrainz editions, %d distinct tracklists)",

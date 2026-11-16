@@ -158,6 +158,8 @@ export interface RemoteFile {
 }
 
 export interface ScoreDetail {
+  /** Only when the folder is heavier than the preferred album size */
+  size?: { points: number, mb: number, preferred: number }
   format?: { points: number, max: number, format: string | null, label: string, rank: number | null, mixed: boolean }
   match?: {
     points: number
@@ -399,7 +401,7 @@ export interface AppSettings {
     search_wait_seconds: number
     proposals: number
     min_match: number
-    max_album_mb: number
+    preferred_album_mb: number
     download_covers: boolean
     stuck_no_progress_minutes: number
     stuck_queue_minutes: number

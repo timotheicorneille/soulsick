@@ -82,6 +82,9 @@ const statusBadge = computed(() => {
         <p v-if="c.status === 'failed'" class="text-[11.5px] text-muted-foreground">
           {{ t('candidate.resumeHint', { peer: c.username }) }}
         </p>
+        <p v-if="c.score_detail.size" class="text-[11.5px] text-faint">
+          {{ t('candidate.heavier', { mb: c.score_detail.size.mb, preferred: c.score_detail.size.preferred, points: -c.score_detail.size.points }) }}
+        </p>
         <p v-if="c.score_detail.match?.missing?.length" class="text-[11.5px] text-faint">
           {{ t('candidate.missing', { tracks: c.score_detail.match.missing.join(', ') }) }}
         </p>

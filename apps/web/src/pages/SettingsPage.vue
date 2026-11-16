@@ -278,10 +278,10 @@ const removeProfile = useMutation({
           </div>
           <Field>
             <FieldLabel for="hma">
-              {{ t('settings.hunter.maxAlbum') }}
+              {{ t('settings.hunter.preferredAlbum') }}
             </FieldLabel>
-            <Input id="hma" v-model.number="form.hunter.max_album_mb" type="number" min="0" step="50" class="font-mono sm:max-w-48" />
-            <FieldDescription>{{ t('settings.hunter.maxAlbumHint') }}</FieldDescription>
+            <Input id="hma" v-model.number="form.hunter.preferred_album_mb" type="number" min="0" step="50" class="font-mono sm:max-w-48" />
+            <FieldDescription>{{ t('settings.hunter.preferredAlbumHint') }}</FieldDescription>
           </Field>
           <Field orientation="horizontal">
             <Switch id="hc" v-model="form.hunter.download_covers" />

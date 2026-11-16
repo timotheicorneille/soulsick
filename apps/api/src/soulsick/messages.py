@@ -76,7 +76,6 @@ EN: dict[str, str] = {
     "reject.no_tracklist": "No MusicBrainz tracklist available",
     "reject.missing_tracks": "{n} track missing out of {total} (allowed: {allowed}) | {n} tracks missing out of {total} (allowed: {allowed})",
     "reject.titles": "Titles too different from the tracklist ({score} % < {min} %)",
-    "reject.too_big": "Too heavy: {size} MB (limit: {max} MB)",
     # --- rejection summary of a hunt (reason.no_valid_why), one per reject.* key
     "rejections.not_better": "not better than the present version ×{n}",
     "rejections.unknown_format": "unrecognised format ×{n}",
@@ -84,7 +83,6 @@ EN: dict[str, str] = {
     "rejections.no_tracklist": "no MusicBrainz tracklist ×{n}",
     "rejections.missing_tracks": "missing tracks ×{n}",
     "rejections.titles": "titles too different ×{n}",
-    "rejections.too_big": "too heavy ×{n}",
 
     # --- journal
     "app.started": "Soulsick started",

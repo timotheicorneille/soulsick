@@ -139,6 +139,11 @@ def peer_points(c: ScoredCandidate) -> tuple[float, dict]:
     }
 
 
+# What a folder heavier than the preferred size loses: more than a better format or a better peer
+# can win back, so that a lighter folder of the same album comes first
+OVERSIZE_PENALTY = 40.0
+
+
 def score_candidate(
     c: ScoredCandidate,
     releases: list[ReleaseOption],
@@ -146,7 +151,7 @@ def score_candidate(
     max_missing_tracks: int = 0,
     min_match: float = 0.6,
     artist_hint: str = "",
-    max_album_mb: int = 0,
+    preferred_album_mb: int = 0,
 ) -> ScoredCandidate:
     # Format : c'est le fichier le moins bon qui fixe la qualité de l'album
     formats = [detect_format(f.info) for f in c.audio_files]
@@ -195,6 +200,11 @@ def score_candidate(
     p_points, p_detail = peer_points(c)
     c.detail["peer"] = p_detail
     c.score = round(fmt_points + match_points + p_points, 1)
+    # Heavier than you prefer: still a candidate, only behind the lighter ones (taken when alone)
+    mb = round(sum(f.size or 0 for f in c.audio_files) / 1_000_000)
+    if preferred_album_mb and mb > preferred_album_mb:
+        c.detail["size"] = {"points": -OVERSIZE_PENALTY, "mb": mb, "preferred": preferred_album_mb}
+        c.score = round(max(0.0, c.score - OVERSIZE_PENALTY), 1)
 
     # Rejection reasons, most serious first
     if rank is None:
@@ -211,9 +221,6 @@ def score_candidate(
             c.reject_reason = M("reject.missing_tracks", n=missing, total=len(rel.tracks), allowed=max_missing_tracks)
         elif m.title_score < min_match:
             c.reject_reason = M("reject.titles", score=round(m.title_score * 100), min=round(min_match * 100))
-        elif max_album_mb and (mb := sum(f.size or 0 for f in c.audio_files) / 1_000_000) > max_album_mb:
-            # Last: a folder that is the right album, only heavier than you want
-            c.reject_reason = M("reject.too_big", size=round(mb), max=max_album_mb)
     return c
 
 
@@ -245,13 +252,13 @@ def rank_candidates(
     max_missing_tracks: int = 0,
     min_match: float = 0.6,
     artist_hint: str = "",
-    max_album_mb: int = 0,
+    preferred_album_mb: int = 0,
 ) -> list[ScoredCandidate]:
     releases = unique_tracklists(releases)
     cands = [
         score_candidate(
             c, compatible(releases, len(c.audio_files)), profile_formats, max_missing_tracks, min_match,
-            artist_hint, max_album_mb,
+            artist_hint, preferred_album_mb,
         )
         for c in group_results(results)
     ]

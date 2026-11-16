@@ -35,6 +35,8 @@ from ..slsk.engine import EngineUnavailable
 from .coverage import ACTIVE
 
 if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
+
     from ..core import Core
 
 log = logging.getLogger(__name__)
@@ -964,13 +966,15 @@ class HunterService:
                     t.error = M("transfer.source_failed").text
                     t.completed_at = datetime.now(UTC)
             targets = [(t.id, t.username, t.remote_path) for t in pending]
-            nxt = (
-                await s.execute(
-                    select(Candidate)
-                    .where(Candidate.release_group_id == rg.id, Candidate.status == CandidateStatus.PROPOSED)
-                    .order_by(Candidate.score.desc())
-                )
-            ).scalars().first()
+            others = list((await s.execute(
+                select(Candidate)
+                .where(Candidate.release_group_id == rg.id, Candidate.status == CandidateStatus.PROPOSED)
+                .order_by(Candidate.score.desc())
+            )).scalars())
+            # Taken on its own only from another peer: another folder of this one would keep the
+            # album waiting just as long
+            avoid = await _peers_to_avoid(s, c)
+            nxt = next((o for o in others if o.username not in avoid), None)
             await s.commit()
             rg_id, label, mode = rg.id, f"{artist.name} – {rg.title}", artist.mode
             next_id = nxt.id if nxt else None
@@ -997,7 +1001,8 @@ class HunterService:
                 release_group_id=rg_id, candidate_id=next_id,
             )
             await self.start_download(next_id, by="auto")
-        elif try_next and next_id:
+        elif try_next and others:
+            # Validation mode, or only folders of peers that already failed here: you pick
             await self._set_status(rg_id, AlbumStatus.PENDING_APPROVAL, M("reason.chosen_failed"))
         else:
             await self._set_status(rg_id, AlbumStatus.WANTED, M("reason.last_failed", reason=reason))
@@ -1048,11 +1053,7 @@ class HunterService:
             c = await s.get(Candidate, candidate_id)
             if not c or c.status != CandidateStatus.CHOSEN:
                 return
-            # A peer that already let this album down is not picked again on its own (another
-            # folder of the same silent peer, a source dropped earlier)
-            avoid = {c.username} | set((await s.execute(select(Candidate.username).where(
-                Candidate.release_group_id == c.release_group_id, Candidate.status == CandidateStatus.FAILED,
-            ))).scalars())
+            avoid = await _peers_to_avoid(s, c)
         alts = await self.core.coverage.alternatives(candidate_id, limit=None)
         plan: list[tuple[dict, list[int]]] = []
         taken: set[int] = set()
@@ -1126,6 +1127,15 @@ class HunterService:
             "last_run_at": self.last_run_at.isoformat() if self.last_run_at else None,
             "next_run_at": self.next_run_at.isoformat() if self.next_run_at else None,
         }
+
+
+async def _peers_to_avoid(s: AsyncSession, c: Candidate) -> set[str]:
+    """Peers not picked again on their own for this album, after source `c`: its own (another
+    folder of the same peer is not another source) and any peer that already let the album down.
+    You can still pick them yourself."""
+    return {c.username} | set((await s.execute(select(Candidate.username).where(
+        Candidate.release_group_id == c.release_group_id, Candidate.status == CandidateStatus.FAILED,
+    ))).scalars())
 
 
 def _aware(dt: datetime) -> datetime:

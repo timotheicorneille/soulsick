@@ -222,7 +222,8 @@ async def test_aioslsk_requeue_never_restarts_finished_or_stopped_files():
     for value, expected in ((S.COMPLETE, 0), (S.PAUSED, 0), (S.ABORTED, 0), (S.QUEUED, 1)):
         t = T(value)
         await mgr._queue_remotely(t)
-        assert t.state.queued == expected, value
+        # Only a file still waiting is retried (later, see test_requeue.py); none is put back
+        assert t.state.queued == 0 and t.attempts == expected, value
 
 
 async def test_a_received_file_is_never_downloaded_again(ctx):  # noqa: F811

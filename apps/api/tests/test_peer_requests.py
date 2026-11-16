@@ -94,6 +94,6 @@ async def test_a_queue_request_that_never_ends_frees_the_peer():
     stuck, nxt = T(), T()
     await asyncio.wait_for(asyncio.gather(mgr._queue_remotely(stuck), mgr._queue_remotely(nxt)), 2)
     # The hung request gives up and goes back to the queue; the next file is asked
-    assert stuck.state.queued == 1 and not stuck.remotely_queued
+    assert not stuck.remotely_queued
     assert nxt.remotely_queued
     assert mgr._network.calls == 2

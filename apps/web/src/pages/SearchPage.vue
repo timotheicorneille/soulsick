@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import type { SearchSnapshot } from '@/lib/types'
-import { SearchIcon } from '@lucide/vue'
-import { useMutation, useQuery } from '@tanstack/vue-query'
-import { useIntervalFn } from '@vueuse/core'
+import type { AlbumDetail, Candidate, SearchFolder, SearchSnapshot, SearchSort } from '@/lib/types'
+import { DiscIcon, ListFilterIcon, SearchIcon, XIcon } from '@lucide/vue'
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/vue-query'
+import { refDebounced, useIntervalFn } from '@vueuse/core'
 import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
@@ -17,7 +17,9 @@ import { Spinner } from '@/components/ui/spinner'
 import { Switch } from '@/components/ui/switch'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { useStatus } from '@/composables/queries'
+import { useRequestedFiles } from '@/composables/requestedFiles'
 import { api } from '@/lib/api'
+import { serverText } from '@/lib/serverText'
 import { LOSSLESS } from '@/lib/status'
 
 const { t } = useI18n()
@@ -27,32 +29,55 @@ const { data: status } = useStatus()
 
 const q = ref((route.query.q as string) ?? '')
 const ticket = ref<number | null>(route.query.t ? Number(route.query.t) : null)
+// The engine keeps collecting answers after that; the page just stops asking for them
+const LISTEN_MS = 40_000
 const startedAt = ref(Date.now())
+const listenUntil = ref(startedAt.value + LISTEN_MS)
 const quality = ref<'all' | 'lossless' | 'lossy'>('all')
 const freeOnly = ref(false)
+// Sort and text filter run on the server, before it keeps the first 300 folders
+const sort = ref<SearchSort>('queue')
+const filter = ref('')
+const filterDebounced = refDebounced(filter, 300)
 
 const start = useMutation({
   mutationFn: () => api.post<{ ticket: number }>('/search', { query: q.value.trim() }),
   onSuccess: (d) => {
     ticket.value = d.ticket
     startedAt.value = Date.now()
-    router.replace({ query: { q: q.value.trim(), t: d.ticket } })
+    listenUntil.value = startedAt.value + LISTEN_MS
+    router.replace({ query: { ...route.query, q: q.value.trim(), t: d.ticket } })
   },
   onError: e => toast.error(t('search.failed'), { description: e.message }),
 })
 
-const { data: snap, error } = useQuery({
-  queryKey: ['search', ticket],
-  queryFn: () => api.get<SearchSnapshot>(`/search/${ticket.value}`),
+const { data: snap, error, refetch } = useQuery({
+  queryKey: ['search', ticket, sort, filterDebounced],
+  queryFn: () => api.get<SearchSnapshot>(
+    `/search/${ticket.value}?${new URLSearchParams({ sort: sort.value, filter: filterDebounced.value.trim() })}`,
+  ),
   enabled: computed(() => ticket.value != null),
-  // Refresh for ~40 s: peers answer as they go
-  refetchInterval: () => (Date.now() - startedAt.value < 40_000 ? 1500 : false),
+  placeholderData: keepPreviousData,
+  // Refresh while listening: peers answer as they go
+  refetchInterval: query => (!query.state.error && Date.now() < listenUntil.value ? 1500 : false),
 })
 const now = ref(Date.now())
 useIntervalFn(() => (now.value = Date.now()), 1000)
-const listening = computed(() => ticket.value != null && now.value - startedAt.value < 40_000)
+const listening = computed(() => ticket.value != null && !error.value && now.value < listenUntil.value)
 
-const hidden = computed(() => (snap.value?.folders.length ?? 0) - folders.value.length)
+function keepListening() {
+  listenUntil.value = Date.now() + LISTEN_MS
+  now.value = Date.now()
+  // The refresh interval is only looked at again after a fetch
+  refetch()
+}
+
+// Left out by the text filter (server side) or by the toggles below (here)
+const hidden = computed(() => snap.value
+  ? snap.value.folder_count - snap.value.match_count + snap.value.folders.length - folders.value.length
+  : 0)
+// Matching folders past the 300 the server sends
+const beyond = computed(() => snap.value ? snap.value.match_count - snap.value.folders.length : 0)
 const folders = computed(() => (snap.value?.folders ?? []).filter((f) => {
   if (freeOnly.value && !f.has_free_slots)
     return false
@@ -63,13 +88,69 @@ const folders = computed(() => (snap.value?.folders ?? []).filter((f) => {
   return true
 }))
 
+const requested = useRequestedFiles()
 const download = useMutation({
   mutationFn: (v: { username: string, files: string[] }) => api.post<{ ids: number[] }>('/downloads', v),
   onSuccess: (d, v) => toast.success(t('search.queued', d.ids.length), {
     description: t('search.queuedHint', { peer: v.username, path: `${status.value?.paths.downloads ?? 'downloads'}/manual/${v.username}/` }),
   }),
-  onError: e => toast.error(e.message),
+  onError: (e, v) => {
+    requested.release(v.username, v.files)
+    toast.error(e.message)
+  },
 })
+
+function ask(username: string, files: string[]) {
+  const fresh = requested.claim(username, files)
+  if (fresh.length)
+    download.mutate({ username, files: fresh })
+}
+
+// Opened from an album ("Search by hand"): a folder found here can become its source
+const qc = useQueryClient()
+const albumId = computed(() => (route.query.album ? Number(route.query.album) : null))
+const { data: album } = useQuery({
+  queryKey: ['album', albumId],
+  queryFn: () => api.get<AlbumDetail>(`/albums/${albumId.value}`),
+  enabled: computed(() => albumId.value != null),
+})
+
+function leaveAlbum() {
+  const { album: _, ...rest } = route.query
+  router.replace({ query: rest })
+}
+
+const useForAlbum = useMutation({
+  mutationFn: (v: { album: number, folder: SearchFolder, claimed: string[] }) =>
+    api.post<{ candidate: Candidate, created: boolean, dropped: number }>(`/albums/${v.album}/candidates`, v.folder),
+  onSuccess: (r, v) => {
+    const c = r.candidate
+    const notes = [
+      c.reject_reason ? t('search.usedDespite', { reason: serverText(c.reject_reason, c.reject_reason_t) }) : '',
+      r.dropped ? t('search.usedReplacing', r.dropped) : '',
+    ].filter(Boolean)
+    toast.success(t('search.usedForAlbum', { peer: c.username }), { description: notes.join(' ') || undefined })
+    qc.invalidateQueries({ queryKey: ['album', v.album] })
+    router.push({ name: 'album', params: { id: v.album } })
+  },
+  onError: (e, v) => {
+    requested.release(v.folder.username, v.claimed)
+    toast.error(e.message)
+  },
+})
+
+function useFolder(folder: SearchFolder) {
+  if (albumId.value == null)
+    return
+  // Claimed on click: a double click sends it once, and the folder shows as requested
+  const claimed = requested.claim(folder.username, folder.files.map(f => f.filename))
+  if (claimed.length)
+    useForAlbum.mutate({ album: albumId.value, folder, claimed })
+}
+
+// Coming from the album page: the query is filled in, the search starts by itself
+if (albumId.value != null && q.value.trim().length >= 2 && ticket.value == null)
+  start.mutate()
 </script>
 
 <template>
@@ -91,16 +172,38 @@ const download = useMutation({
       </Button>
     </form>
 
+    <div v-if="albumId != null" class="mb-5 flex flex-wrap items-center gap-x-3 gap-y-2 rounded-xl bg-card px-4 py-3 text-[12.5px]">
+      <DiscIcon class="size-4 shrink-0 text-primary" />
+      <span class="text-muted-foreground">{{ t('search.forAlbum') }}</span>
+      <RouterLink :to="{ name: 'album', params: { id: albumId } }" class="min-w-0 truncate font-medium hover:text-primary">
+        <template v-if="album">
+          {{ album.artist?.name }} – {{ album.title }}
+        </template>
+        <template v-else>
+          #{{ albumId }}
+        </template>
+      </RouterLink>
+      <Button variant="ghost" size="xs" class="ml-auto text-muted-foreground" @click="leaveAlbum">
+        <XIcon data-icon="inline-start" />
+        {{ t('search.leaveAlbum') }}
+      </Button>
+    </div>
+
     <Alert v-if="error" variant="destructive" class="mb-5">
       <AlertDescription>{{ error.message }}</AlertDescription>
     </Alert>
 
     <template v-if="snap">
       <div class="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center">
-        <p class="font-mono text-[12px] text-muted-foreground tnum">
-          {{ t('search.stats', { peers: snap.peer_count, files: snap.file_count, folders: snap.folders.length }) }}
-          <span v-if="listening" class="text-primary"> · {{ t('search.listening') }}</span>
-        </p>
+        <div class="flex flex-wrap items-center gap-2">
+          <p class="font-mono text-[12px] text-muted-foreground tnum">
+            {{ t('search.stats', { peers: snap.peer_count, files: snap.file_count, folders: snap.folder_count }) }}
+            <span v-if="listening" class="text-primary"> · {{ t('search.listening') }}</span>
+          </p>
+          <Button v-if="!listening && !error" variant="outline" size="xs" @click="keepListening">
+            {{ t('search.keepListening') }}
+          </Button>
+        </div>
         <div class="flex items-center gap-4 sm:ml-auto">
           <label class="flex items-center gap-2 text-[12.5px] text-muted-foreground">
             <Switch v-model="freeOnly" />
@@ -115,6 +218,35 @@ const download = useMutation({
             </ToggleGroupItem>
             <ToggleGroupItem value="lossy">
               {{ t('search.lossy') }}
+            </ToggleGroupItem>
+          </ToggleGroup>
+        </div>
+      </div>
+
+      <div class="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center">
+        <InputGroup class="sm:max-w-sm">
+          <InputGroupAddon>
+            <ListFilterIcon />
+          </InputGroupAddon>
+          <InputGroupInput v-model="filter" :placeholder="t('search.filter')" />
+        </InputGroup>
+        <div class="flex items-center gap-2 sm:ml-auto">
+          <span class="text-[12.5px] text-muted-foreground">{{ t('search.sortBy') }}</span>
+          <ToggleGroup
+            :model-value="sort"
+            type="single"
+            variant="outline"
+            size="sm"
+            @update:model-value="(v) => { if (v) sort = v as SearchSort }"
+          >
+            <ToggleGroupItem value="queue">
+              {{ t('search.sortQueue') }}
+            </ToggleGroupItem>
+            <ToggleGroupItem value="speed">
+              {{ t('search.sortSpeed') }}
+            </ToggleGroupItem>
+            <ToggleGroupItem value="size">
+              {{ t('search.sortSize') }}
             </ToggleGroupItem>
           </ToggleGroup>
         </div>
@@ -135,11 +267,17 @@ const download = useMutation({
           :has-free-slots="f.has_free_slots"
           :avg-speed="f.avg_speed"
           :queue-size="f.queue_size"
+          :requested="requested.of(f.username)"
+          :for-album="albumId != null"
           show-peer
-          @download="(files) => download.mutate({ username: f.username, files })"
+          @download="(files) => ask(f.username, files)"
+          @use-for-album="useFolder(f)"
         />
         <p v-if="!folders.length && !listening" class="py-10 text-center text-[12.5px] text-faint">
           {{ t('search.noMatch') }}
+        </p>
+        <p v-if="beyond > 0" class="py-2 text-center text-[12px] text-faint">
+          {{ t('search.beyond', beyond) }}
         </p>
       </div>
 
@@ -157,6 +295,9 @@ const download = useMutation({
           {{ t('search.howItWorks') }}
           <template v-if="listening">
             {{ t('search.listeningFor', { s: Math.round((now - startedAt) / 1000) }) }}
+          </template>
+          <template v-else-if="!error">
+            {{ t('search.notRefreshing') }}
           </template>
         </p>
         <ol class="scrollbar-thin flex max-h-[60svh] flex-col overflow-y-auto font-mono text-[11px]">

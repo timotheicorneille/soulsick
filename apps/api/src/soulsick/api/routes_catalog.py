@@ -26,6 +26,7 @@ from ..models import (
     of_artist,
 )
 from ..musicbrainz import MusicBrainzError
+from ..scoring import PeerResult, RemoteFile, group_key
 from ..slsk.engine import EngineUnavailable
 from ..services.transfers import transfer_to_dict
 from .deps import get_core, require_user
@@ -515,6 +516,75 @@ async def approve(cid: int, core: Core = Depends(get_core)) -> dict:
         return {"ok": True, "resumed": True, "missing": missing}
     await core.hunter.start_download(cid, by="user")
     return {"ok": True, "resumed": False}
+
+
+class FolderFileIn(BaseModel):
+    filename: str = Field(min_length=1, max_length=1024)
+    size: int = 0
+    bitrate: int | None = None
+    duration: int | None = None
+    sample_rate: int | None = None
+    bit_depth: int | None = None
+    vbr: bool = False
+
+
+class FolderIn(BaseModel):
+    """A folder of a search result (`GET /search/{ticket}`), sent back as it came."""
+
+    username: str = Field(min_length=1, max_length=255)
+    directory: str = Field(max_length=1024)
+    files: list[FolderFileIn] = Field(min_length=1, max_length=1000)
+    has_free_slots: bool = False
+    avg_speed: int = 0
+    queue_size: int = 0
+
+
+@router.post("/albums/{rid}/candidates")
+async def use_folder(rid: int, body: FolderIn, core: Core = Depends(get_core)) -> dict:
+    """« Utiliser pour cet album »: a search result becomes this album's source, scored as a
+    hunt's folder and taken even when the scoring rejects it."""
+    async with core.db.session() as s:
+        rg = await s.get(ReleaseGroup, rid)
+        if not rg:
+            raise http_error(404, "error.album_not_found")
+        partial = bool(rg.total_tracks and (rg.present_tracks or 0) < rg.total_tracks)
+        if rg.status == AlbumStatus.IMPORTED and not partial:
+            raise http_error(409, "error.album_complete")
+        same = list((await s.execute(select(Candidate).where(
+            Candidate.release_group_id == rid, Candidate.username == body.username,
+            Candidate.directory == body.directory,
+        ).order_by(desc(Candidate.id)))).scalars())
+    for f in body.files:
+        # Only files of this folder, asked to this peer: the download goes to the album's own
+        # folder under the remote file name, never to a path chosen by the client
+        name = f.filename.replace("\\", "/").rsplit("/", 1)[-1]
+        if group_key(f.filename) != body.directory or not name.strip(" ."):
+            raise http_error(400, "error.file_not_in_folder", path=f.filename)
+    if not core.engine.logged_in:
+        raise http_error(503, "error.engine_offline")
+    if any(c.status in (CandidateStatus.CHOSEN, CandidateStatus.DOWNLOADED) for c in same):
+        raise http_error(409, "error.candidate_busy")
+    # Already a candidate of this album (from a hunt, or picked before): that one, no duplicate
+    takeable = (CandidateStatus.PROPOSED, CandidateStatus.REJECTED, CandidateStatus.FAILED)
+    reuse = sorted(
+        (c for c in same if c.status in takeable), key=lambda c: c.status == CandidateStatus.FAILED
+    )
+    try:
+        cid = reuse[0].id if reuse else await core.hunter.add_folder(rid, PeerResult(
+            body.username, body.has_free_slots, body.avg_speed, body.queue_size,
+            [RemoteFile(**f.model_dump()) for f in body.files],
+        ))
+        if cid is None:
+            raise http_error(400, "error.no_audio_files")
+        dropped = await core.hunter.take_folder(cid)
+    except MusicBrainzError as e:
+        raise HTTPException(502, str(e)) from e
+    except (ValueError, EngineUnavailable) as e:
+        raise as_http(e, 409) from e
+    async with core.db.session() as s:
+        c = await s.get(Candidate, cid)
+        assert c
+    return {"ok": True, "candidate": candidate_dict(c), "created": not reuse, "dropped": dropped}
 
 
 @router.post("/albums/{rid}/import")

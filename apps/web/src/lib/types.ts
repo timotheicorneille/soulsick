@@ -346,9 +346,14 @@ export interface SearchSnapshot {
   elapsed: number
   peer_count: number
   file_count: number
+  /** Every folder found, then those passing the text filter; `folders` keeps the first 300 */
+  folder_count: number
+  match_count: number
   folders: SearchFolder[]
   responses?: SearchResponse[]
 }
+
+export type SearchSort = 'queue' | 'speed' | 'size'
 
 export interface Share {
   id: number

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { RemoteFile } from '@/lib/types'
-import { ChevronDownIcon, DownloadIcon, FolderIcon } from '@lucide/vue'
+import { CheckIcon, ChevronDownIcon, DiscIcon, DownloadIcon, FolderIcon } from '@lucide/vue'
 import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { Button } from '@/components/ui/button'
@@ -21,8 +21,12 @@ const props = defineProps<{
   queueSize?: number
   defaultOpen?: boolean
   showPeer?: boolean
+  /** Files of this folder already asked for: shown as such, never asked for again */
+  requested?: ReadonlySet<string>
+  /** Searching for an album: the whole folder can become its source */
+  forAlbum?: boolean
 }>()
-const emit = defineEmits<{ download: [files: string[]] }>()
+const emit = defineEmits<{ download: [files: string[]], useForAlbum: [] }>()
 
 const { t } = useI18n()
 const open = ref(props.defaultOpen ?? false)
@@ -30,6 +34,16 @@ const selected = ref<Set<string>>(new Set())
 const audio = computed(() => props.files.filter(f => !f.extra && f.format))
 const size = computed(() => props.files.reduce((s, f) => s + (f.size ?? 0), 0))
 const fmts = computed(() => props.formats ?? [...new Set(audio.value.map(f => f.format).filter(Boolean) as string[])])
+const isRequested = (name: string) => props.requested?.has(name) ?? false
+/** What the folder button still asks for */
+const remaining = computed(() => props.files.map(f => f.filename).filter(name => !isRequested(name)))
+
+function ask(files: string[]) {
+  selected.value = new Set()
+  const todo = files.filter(name => !isRequested(name))
+  if (todo.length)
+    emit('download', todo)
+}
 
 function toggle(name: string, on: boolean) {
   const s = new Set(selected.value)
@@ -66,17 +80,30 @@ function toggle(name: string, on: boolean) {
         <ChevronDownIcon :class="cn('mt-0.5 ml-auto size-4 shrink-0 text-faint transition-transform', open && 'rotate-180')" />
       </CollapsibleTrigger>
       <div class="flex shrink-0 items-center gap-2">
+        <Button v-if="forAlbum" size="sm" :disabled="!remaining.length" @click="emit('useForAlbum')">
+          <DiscIcon data-icon="inline-start" />
+          {{ t('folder.useForAlbum') }}
+        </Button>
         <Button
           v-if="selected.size"
           variant="outline"
           size="sm"
-          @click="emit('download', [...selected]); selected = new Set()"
+          @click="ask([...selected])"
         >
           {{ t('folder.selected', selected.size) }}
         </Button>
-        <Button size="sm" variant="secondary" @click="emit('download', files.map(f => f.filename))">
-          <DownloadIcon data-icon="inline-start" />
-          {{ t('folder.download') }}
+        <Button size="sm" variant="secondary" :disabled="!remaining.length" @click="ask(remaining)">
+          <CheckIcon v-if="!remaining.length" data-icon="inline-start" />
+          <DownloadIcon v-else data-icon="inline-start" />
+          <template v-if="!remaining.length">
+            {{ t('folder.requested') }}
+          </template>
+          <template v-else-if="remaining.length < files.length">
+            {{ t('folder.rest', { n: remaining.length }) }}
+          </template>
+          <template v-else>
+            {{ t('folder.download') }}
+          </template>
         </Button>
       </div>
     </div>
@@ -84,7 +111,8 @@ function toggle(name: string, on: boolean) {
       <ul class="border-t px-3.5 py-1.5">
         <li v-for="f in files" :key="f.filename" class="flex items-center gap-3 py-1 text-[12px]">
           <Checkbox
-            :model-value="selected.has(f.filename)"
+            :model-value="selected.has(f.filename) || isRequested(f.filename)"
+            :disabled="isRequested(f.filename)"
             :aria-label="t('folder.select', { name: splitPath(f.filename).name })"
             @update:model-value="(v) => toggle(f.filename, v === true)"
           />

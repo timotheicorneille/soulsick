@@ -58,14 +58,42 @@ async def start_search(body: SearchIn, core: Core = Depends(get_core)) -> dict:
     return {"ticket": live.ticket, "query": live.query}
 
 
+SEARCH_FOLDER_LIMIT = 300
+
+# Folder order. Only the first 300 are sent, so the sort happens here and not in the browser
+SEARCH_SORTS = {
+    "queue": lambda f: (not f["has_free_slots"], f["queue_size"], -f["avg_speed"]),
+    "speed": lambda f: (-f["avg_speed"], not f["has_free_slots"], f["queue_size"]),
+    "size": lambda f: (-f["size"], not f["has_free_slots"], f["queue_size"]),
+}
+
+
+def _folder_matches(username: str, directory: str, terms: list[str]) -> bool:
+    """Every word must appear in the peer or folder name, and none of the "-word" ones."""
+    text = f"{username}\\{directory}".casefold()
+    for term in terms:
+        if term.startswith("-") and len(term) > 1:
+            if term[1:] in text:
+                return False
+        elif term not in text:
+            return False
+    return True
+
+
 @router.get("/search/{ticket}")
-async def get_search(ticket: int, core: Core = Depends(get_core)) -> dict:
+async def get_search(
+    ticket: int, sort: Literal["queue", "speed", "size"] = "queue", filter: str = "",
+    core: Core = Depends(get_core),
+) -> dict:
     live = core.engine.searches.get(ticket)
     if not live:
         raise http_error(404, "error.search_expired")
     groups = group_results(live.results)
+    terms = filter.casefold().split()
     folders = []
     for g in groups:
+        if terms and not _folder_matches(g.username, g.directory, terms):
+            continue
         files = [f.to_dict() for f in g.audio_files] + [f.to_dict() | {"extra": True} for f in g.extra_files]
         formats = sorted({f["format"] for f in files if f.get("format")})
         folders.append(
@@ -81,14 +109,16 @@ async def get_search(ticket: int, core: Core = Depends(get_core)) -> dict:
                 "queue_size": g.queue_size,
             }
         )
-    folders.sort(key=lambda f: (not f["has_free_slots"], f["queue_size"], -f["avg_speed"]))
+    folders.sort(key=SEARCH_SORTS[sort])
     return {
         "ticket": ticket,
         "query": live.query,
         "elapsed": round(time.time() - live.started, 1),
         "peer_count": len(live.results),
         "file_count": sum(len(r.files) for r in live.results),
-        "folders": folders[:300],
+        "folder_count": len(groups),
+        "match_count": len(folders),
+        "folders": folders[:SEARCH_FOLDER_LIMIT],
         "responses": list(reversed(live.responses[-300:])),
     }
 

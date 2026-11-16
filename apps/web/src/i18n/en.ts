@@ -380,6 +380,7 @@ const en = {
     stuckWhy: {
       no_progress: 'No data received since {since}.',
       queue_frozen: 'Its place in the peer’s queue (#{place}) hasn’t moved since {since}.',
+      no_answer: 'Request sent {since}, still no answer from the peer.',
       retrying: 'Already {n} attempts for this file.',
     },
     stuckAction: '“Switch peer” takes the missing tracks from someone else; what arrived is kept.',
@@ -477,7 +478,7 @@ const en = {
 
   stuck: {
     banner: '{n} stuck download | {n} stuck downloads',
-    bannerHint: 'No progress, frozen queue or repeated attempts: you can switch peer.',
+    bannerHint: 'No progress, frozen queue, no answer or repeated attempts: for an album, you can switch peer.',
   },
 
   library: {
@@ -812,9 +813,11 @@ const en = {
       minMatch: 'Minimum title match',
       minMatchHint: '0.6 = 60 % average similarity with the MusicBrainz tracklist.',
       extras: 'Also download covers, .cue and .log from the folder',
-      stuckIntro: 'When an album download counts as stuck. Nothing is done automatically: it is flagged, and you can switch peer.',
+      stuckIntro: 'When a download counts as stuck. Nothing is done automatically: it is flagged, and for an album you can switch peer.',
       stuckNoProgress: 'Without data received (min)',
       stuckQueue: 'Peer’s queue frozen (min)',
+      stuckNoAnswer: 'Request without answer (min)',
+      stuckNoAnswerHint: 'Request never accepted by the peer, for an album or a download started from the search. 0 = never.',
       stuckAttempts: 'From attempt',
       stuckAttemptsHint: '0 = never for repeated attempts.',
       silentSource: 'Replace a silent source after (min)',

@@ -379,6 +379,7 @@ const fr: Messages = {
     stuckWhy: {
       no_progress: 'Plus aucune donnée reçue depuis {since}.',
       queue_frozen: 'Sa place dans la file du pair (#{place}) ne bouge plus depuis {since}.',
+      no_answer: 'Demande envoyée {since}, toujours sans réponse du pair.',
       retrying: 'Déjà {n} essais pour ce fichier.',
     },
     stuckAction: '« Changer de pair » prend les pistes manquantes chez quelqu’un d’autre, ce qui est reçu est gardé.',
@@ -476,7 +477,7 @@ const fr: Messages = {
 
   stuck: {
     banner: '{n} téléchargement bloqué | {n} téléchargements bloqués',
-    bannerHint: 'Plus de progression, file figée ou essais répétés : tu peux changer de pair.',
+    bannerHint: 'Plus de progression, file figée, demande sans réponse ou essais répétés : pour un album, tu peux changer de pair.',
   },
 
   library: {
@@ -811,9 +812,11 @@ const fr: Messages = {
       minMatch: 'Correspondance minimale des titres',
       minMatchHint: '0,6 = 60 % de ressemblance moyenne avec la tracklist MusicBrainz.',
       extras: 'Télécharger aussi pochettes, .cue et .log du dossier',
-      stuckIntro: 'Quand un téléchargement d’album compte comme bloqué. Rien n’est fait automatiquement : il est signalé, et tu peux changer de pair.',
+      stuckIntro: 'Quand un téléchargement compte comme bloqué. Rien n’est fait automatiquement : il est signalé, et pour un album tu peux changer de pair.',
       stuckNoProgress: 'Sans donnée reçue (min)',
       stuckQueue: 'File du pair figée (min)',
+      stuckNoAnswer: 'Demande sans réponse (min)',
+      stuckNoAnswerHint: 'Demande jamais acceptée par le pair, pour un album comme pour un téléchargement lancé depuis la recherche. 0 = jamais.',
       stuckAttempts: 'À partir de l’essai',
       stuckAttemptsHint: '0 = jamais pour les essais répétés.',
       silentSource: 'Remplacer une source muette après (min)',

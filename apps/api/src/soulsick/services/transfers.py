@@ -185,6 +185,14 @@ class TransferService:
             w["queue_since"] = w["queue_place"] = None
             if w["reason"] == "queue_frozen":
                 w["reason"] = w["since"] = None
+        if u.state == TransferState.QUEUED and not u.remotely_queued:
+            # "Request sent": the peer has not taken it in its queue (not yet, or not any more)
+            if w["asked_since"] is None:
+                w["asked_since"] = now
+        else:
+            w["asked_since"] = None
+            if w["reason"] == "no_answer":
+                w["reason"] = w["since"] = None
 
     def _stuck_fields(self, tid: int) -> dict:
         w = self._watch.get(tid)
@@ -214,13 +222,13 @@ class TransferService:
         return cleared
 
     async def check_stuck(self) -> None:
-        """Flags album downloads that stopped moving. Only shown to you: nothing is done automatically."""
+        """Flags downloads that stopped moving, for an album or asked by hand. Only shown to you:
+        nothing is done automatically."""
         cfg = (await self.core.settings.get()).hunter
         now = datetime.now(UTC)
         async with self.core.db.session() as s:
             rows = (await s.execute(select(Transfer).where(
                 Transfer.direction == "download",
-                Transfer.candidate_id.is_not(None),
                 Transfer.state.not_in([*TERMINAL, TransferState.PAUSED]),
             ))).scalars().all()
         active = set()
@@ -237,6 +245,10 @@ class TransferService:
             queued = bool(live.get("remotely_queued", t.remotely_queued)) and state == TransferState.QUEUED
             if queued and w["queue_since"] is None:
                 w["queue_since"] = now
+            asked = state == TransferState.QUEUED and not queued
+            if asked and w["asked_since"] is None:
+                w["asked_since"] = now
+            no_answer = timedelta(minutes=cfg.stuck_no_answer_minutes)
             reason = None
             if cfg.stuck_after_attempts and (t.attempts or 1) >= cfg.stuck_after_attempts:
                 reason = "retrying"
@@ -244,11 +256,15 @@ class TransferService:
                 reason = "no_progress"
             elif queued and now - w["queue_since"] >= timedelta(minutes=cfg.stuck_queue_minutes):
                 reason = "queue_frozen"
+            elif asked and cfg.stuck_no_answer_minutes and now - w["asked_since"] >= no_answer:
+                reason = "no_answer"
             if reason == w["reason"]:
                 continue
             entering = w["reason"] is None
             w["reason"] = reason
-            w["since"] = {"no_progress": w["progress_at"], "queue_frozen": w["queue_since"]}.get(reason, now) if reason else None
+            clocks = {"no_progress": w["progress_at"], "queue_frozen": w["queue_since"],
+                      "no_answer": w["asked_since"]}
+            w["since"] = clocks.get(reason, now) if reason else None
             self._publish_stuck(t.id)
             if reason and entering:
                 await self.core.journal.emit(
@@ -527,7 +543,8 @@ def _snapshot(t: Transfer) -> dict:
 
 
 def _new_watch(transferred: int, now: datetime) -> dict:
-    return {"bytes": transferred, "progress_at": now, "queue_place": None, "queue_since": None, "reason": None, "since": None}
+    return {"bytes": transferred, "progress_at": now, "queue_place": None, "queue_since": None,
+            "asked_since": None, "reason": None, "since": None}
 
 
 def _why(reason: str, w: dict, attempts: int, now: datetime) -> Msg:

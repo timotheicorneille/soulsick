@@ -271,7 +271,7 @@ export interface Transfer {
   stuck_since?: string | null
 }
 
-export type StuckReason = 'no_progress' | 'queue_frozen' | 'retrying'
+export type StuckReason = 'no_progress' | 'queue_frozen' | 'no_answer' | 'retrying'
 
 /** Another peer that has tracks a source has not delivered yet */
 export interface PeerAlternative {
@@ -397,6 +397,7 @@ export interface AppSettings {
     download_covers: boolean
     stuck_no_progress_minutes: number
     stuck_queue_minutes: number
+    stuck_no_answer_minutes: number
     stuck_after_attempts: number
     silent_source_minutes: number
   }

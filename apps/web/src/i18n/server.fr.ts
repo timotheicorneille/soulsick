@@ -90,6 +90,7 @@ const serverFr: Record<string, string> = {
   'download.switched_search': '{label} : source {peer} abandonnée, recherche d’un autre pair',
   'stuck.no_progress': 'aucune donnée reçue depuis {minutes} min',
   'stuck.queue_frozen': 'place dans la file figée depuis {minutes} min',
+  'stuck.no_answer': 'demande sans réponse depuis {minutes} min',
   'stuck.retrying': '{n}e tentative',
   'download.abandoned': '{label} : source {peer} abandonnée par toi ({n} fichier pas encore reçu annulé, ce qui est arrivé est gardé) | {label} : source {peer} abandonnée par toi ({n} fichiers pas encore reçus annulés, ce qui est arrivé est gardé)',
   'hunt.fallback': '{label} : bascule sur le candidat suivant, {next}',
